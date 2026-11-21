@@ -1666,6 +1666,233 @@ def reporting_and_exports_page():
 
 
 
+
+def business_analytics_page():
+    """Owner-facing commercial analytics for revenue, GST, collections and purchases."""
+    db = SessionLocal()
+    try:
+        section_heading(
+            "📊 Business Analytics",
+            "Track revenue, customer contribution, GST liability, collections and purchasing trends.",
+        )
+
+        invoices = db.scalars(
+            select(Invoice).order_by(Invoice.invoice_date.asc(), Invoice.id.asc())
+        ).all()
+        payments = db.scalars(
+            select(Payment).order_by(Payment.payment_date.asc(), Payment.id.asc())
+        ).all()
+        purchases = db.scalars(
+            select(Purchase).order_by(Purchase.purchase_date.asc(), Purchase.id.asc())
+        ).all()
+
+        if not invoices and not payments and not purchases:
+            st.info("Business analytics will appear after invoices, payments and purchases are recorded.")
+            return
+
+        # Resolve invoice -> customer and aggregate values using Decimal.
+        invoice_customer = {}
+        customer_sales = {}
+        monthly_sales = {}
+        gst_summary = {
+            "CGST": Decimal("0"),
+            "SGST": Decimal("0"),
+            "IGST": Decimal("0"),
+        }
+        taxable_revenue = Decimal("0")
+        invoiced_value = Decimal("0")
+
+        for invoice in invoices:
+            order = db.get(SalesOrder, invoice.order_id)
+            customer = db.get(Customer, order.customer_id) if order else None
+            customer_name = customer.name if customer else "Unknown customer"
+            invoice_customer[invoice.id] = customer_name
+
+            taxable = Decimal(str(invoice.taxable_amount or 0))
+            total = Decimal(str(invoice.total_amount or 0))
+            cgst = Decimal(str(invoice.cgst or 0))
+            sgst = Decimal(str(invoice.sgst or 0))
+            igst = Decimal(str(invoice.igst or 0))
+
+            taxable_revenue += taxable
+            invoiced_value += total
+            gst_summary["CGST"] += cgst
+            gst_summary["SGST"] += sgst
+            gst_summary["IGST"] += igst
+
+            customer_sales[customer_name] = customer_sales.get(customer_name, Decimal("0")) + taxable
+
+            if invoice.invoice_date:
+                month_key = invoice.invoice_date.strftime("%Y-%m")
+                monthly_sales[month_key] = monthly_sales.get(month_key, Decimal("0")) + taxable
+
+        # Aggregate collections by invoice and month.
+        collected_total = Decimal("0")
+        payment_by_invoice = {}
+        monthly_collections = {}
+
+        for payment in payments:
+            amount = Decimal(str(payment.amount or 0))
+            collected_total += amount
+            payment_by_invoice[payment.invoice_id] = (
+                payment_by_invoice.get(payment.invoice_id, Decimal("0")) + amount
+            )
+            if payment.payment_date:
+                month_key = payment.payment_date.strftime("%Y-%m")
+                monthly_collections[month_key] = (
+                    monthly_collections.get(month_key, Decimal("0")) + amount
+                )
+
+        # Calculate outstanding against each posted invoice, flooring at zero
+        # so overpayments do not create negative receivables in this summary.
+        outstanding_total = Decimal("0")
+        receivable_rows = []
+        for invoice in invoices:
+            invoice_value = Decimal(str(invoice.total_amount or 0))
+            paid_value = payment_by_invoice.get(invoice.id, Decimal("0"))
+            balance = max(Decimal("0"), invoice_value - paid_value)
+            outstanding_total += balance
+            if balance > 0:
+                receivable_rows.append({
+                    "Invoice": invoice.invoice_number,
+                    "Customer": invoice_customer.get(invoice.id, "Unknown customer"),
+                    "Invoice date": invoice.invoice_date.strftime("%Y-%m-%d") if invoice.invoice_date else "",
+                    "Invoice value (₹)": float(invoice_value),
+                    "Collected (₹)": float(paid_value),
+                    "Outstanding (₹)": float(balance),
+                })
+
+        # Purchase spend uses recorded purchase totals. The status is shown
+        # separately so users can interpret drafts versus received purchases.
+        purchase_spend = Decimal("0")
+        purchase_rows = []
+        monthly_purchases = {}
+        for purchase in purchases:
+            amount = Decimal(str(purchase.total_amount or 0))
+            if str(purchase.status or "").upper() in {"RECEIVED", "POSTED", "COMPLETED"}:
+                purchase_spend += amount
+            supplier = db.get(Supplier, purchase.supplier_id)
+            supplier_name = supplier.name if supplier else "Unknown supplier"
+            purchase_rows.append({
+                "Supplier invoice": purchase.invoice_number,
+                "Supplier": supplier_name,
+                "Date": purchase.purchase_date.strftime("%Y-%m-%d") if purchase.purchase_date else "",
+                "Amount (₹)": float(amount),
+                "Status": purchase.status,
+            })
+            if purchase.purchase_date:
+                month_key = purchase.purchase_date.strftime("%Y-%m")
+                monthly_purchases[month_key] = monthly_purchases.get(month_key, Decimal("0")) + amount
+
+        gst_total = sum(gst_summary.values(), Decimal("0"))
+        collection_rate = (
+            collected_total / invoiced_value * Decimal("100")
+            if invoiced_value > 0 else Decimal("0")
+        )
+
+        st.subheader("Commercial performance")
+        a, b, c, d = st.columns(4)
+        a.metric("Taxable revenue", format_currency(taxable_revenue))
+        b.metric("Total invoice value", format_currency(invoiced_value))
+        c.metric("Customer collections", format_currency(collected_total))
+        d.metric("Outstanding receivables", format_currency(outstanding_total))
+
+        e, f, g, h = st.columns(4)
+        e.metric("GST on invoices", format_currency(gst_total))
+        f.metric("Purchase spend (received)", format_currency(purchase_spend))
+        g.metric("Collection rate", f"{collection_rate:.2f}%")
+        h.metric("Invoices issued", f"{len(invoices):,}")
+
+        st.divider()
+        section_heading("Revenue and collection trends")
+
+        trend_months = sorted(set(monthly_sales) | set(monthly_collections) | set(monthly_purchases))
+        if trend_months:
+            trend_rows = []
+            for month in trend_months:
+                trend_rows.append({
+                    "Month": month,
+                    "Taxable sales (₹)": float(monthly_sales.get(month, Decimal("0"))),
+                    "Collections (₹)": float(monthly_collections.get(month, Decimal("0"))),
+                    "Received purchases (₹)": float(monthly_purchases.get(month, Decimal("0"))),
+                })
+            trend_df = pd.DataFrame(trend_rows).set_index("Month")
+            st.line_chart(
+                trend_df[["Taxable sales (₹)", "Collections (₹)"]],
+                use_container_width=True,
+            )
+            st.bar_chart(
+                trend_df[["Taxable sales (₹)", "Received purchases (₹)"]],
+                use_container_width=True,
+            )
+            st.dataframe(trend_df, use_container_width=True)
+        else:
+            st.info("No dated transactions are available for monthly trends.")
+
+        st.divider()
+        section_heading("Customer-wise sales contribution")
+        if customer_sales:
+            customer_df = pd.DataFrame([
+                {"Customer": name, "Taxable sales (₹)": float(value)}
+                for name, value in sorted(customer_sales.items(), key=lambda item: item[1], reverse=True)
+            ])
+            st.bar_chart(customer_df.set_index("Customer"), use_container_width=True)
+            st.dataframe(customer_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No customer sales are available yet.")
+
+        st.divider()
+        section_heading("GST breakdown")
+        gst_df = pd.DataFrame([
+            {"Tax component": name, "Amount (₹)": float(value)}
+            for name, value in gst_summary.items()
+        ])
+        gst_df.loc[len(gst_df)] = {
+            "Tax component": "Total GST",
+            "Amount (₹)": float(gst_total),
+        }
+        st.dataframe(gst_df, use_container_width=True, hide_index=True)
+        st.caption(
+            "This summary totals GST amounts recorded on invoices. It is an operational summary, "
+            "not a filed GST return or a substitute for tax reconciliation."
+        )
+
+        st.divider()
+        section_heading("Receivables and collections")
+        if receivable_rows:
+            receivables_df = pd.DataFrame(receivable_rows)
+            st.dataframe(receivables_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download outstanding receivables (CSV)",
+                data=receivables_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="NammaFactory_Outstanding_Receivables.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.success("There are no outstanding invoice balances.")
+
+        st.divider()
+        section_heading("Purchase expenditure")
+        if purchase_rows:
+            purchases_df = pd.DataFrame(purchase_rows)
+            st.dataframe(purchases_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download purchase analysis (CSV)",
+                data=purchases_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="NammaFactory_Purchase_Analysis.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.info("No purchase transactions have been recorded yet.")
+
+    except Exception as exc:
+        st.error(f"Unable to load business analytics: {exc}")
+    finally:
+        db.close()
+
+
 def production_intelligence_page():
     """Owner-facing planned-versus-actual manufacturing analysis."""
     db = SessionLocal()
@@ -2500,31 +2727,7 @@ def show_workspace_page(role, page, user):
 
         elif page == "Business Analytics":
 
-            section_heading("Business Analytics")
-
-            db = SessionLocal()
-
-            try:
-
-                totals = get_invoice_totals(db)
-
-                st.metric(
-                    "Taxable Revenue",
-                    format_currency(totals["taxable_total"]),
-                )
-
-                st.metric(
-                    "Invoice Value",
-                    format_currency(totals["invoice_total"]),
-                )
-
-                st.metric(
-                    "Outstanding",
-                    format_currency(totals["outstanding"]),
-                )
-
-            finally:
-                db.close()
+            business_analytics_page()
 
         elif page == "Production Intelligence":
 
