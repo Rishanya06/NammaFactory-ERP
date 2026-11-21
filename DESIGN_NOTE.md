@@ -1,222 +1,160 @@
-# NammaFactory — Technical Design Note
+# NammaFactory – System Design Note
 
-## 1. Purpose and scope
+## 1. System Architecture and Data Model
 
-NammaFactory is a role-based ERP prototype for a small food manufacturer. Its design connects two operational loops:
+NammaFactory is a role-based ERP application for small food manufacturing businesses. It is built using **Python, Streamlit, SQLAlchemy and SQLite**, with Pandas and OpenPyXL for reporting and ReportLab for invoice PDF generation.
 
-- **Order-to-cash:** sales order → approval → GST invoice → dispatch → customer payment → receivables.
-- **Purchase-to-production:** supplier purchase → raw-material receipt → BOM-based production → actual consumption and output → finished-goods stock → production cost and variance.
+The application follows a modular architecture:
+- **Presentation layer:** Streamlit role-specific interfaces for administrators, salesmen, production staff, accountants and owners.
+- **Business logic layer:** Handles purchases, BOM-based production, inventory movements, order approval, invoicing, dispatch, payments and costing.
+- **Data layer:** SQLAlchemy ORM models backed by an SQLite relational database.
 
-The current implementation is a local Streamlit + SQLAlchemy + SQLite prototype.
+### Core data model
 
-## 2. Architecture
+The database contains 17 tables:
 
-```text
-Role-based Streamlit UI
-        |
-        v
-Page / workflow functions
-        |
-        v
-Business calculations (Decimal)
-        |
-        v
-SQLAlchemy ORM
-        |
-        v
-SQLite database
-        |
-        +--> Sales / invoices / payments
-        +--> Purchases / production / stock movements
-        +--> Audit log
-        |
-        v
-CSV / Excel / PDF reports
-```
-
-The UI layer collects inputs and displays workflow results. SQLAlchemy maps application records to relational tables. Reusable calculations such as stock balance aggregation, weighted-average cost and invoice/payment totals are separated into `utils/business_logic.py` so they can be tested independently.
-
-## 3. Data model
-
-The principal entities are:
-
-| Entity | Responsibility |
+| Functional area | Main entities |
 |---|---|
-| User | Login identity, password hash and role |
-| Product | Finished-goods SKU, HSN, price and GST rate |
-| Customer | Buyer details and state for place-of-supply demonstration |
-| Supplier | Supplier identity and contact/tax details |
-| RawMaterial | Raw material master, unit and reorder threshold |
-| BOM | Product recipe/version and standard batch output |
-| BOMItem | Standard material quantity per BOM |
-| SalesOrder | Customer order, salesman and approval status |
-| SalesOrderItem | Product, quantity and price ordered |
-| Invoice | Taxable amount, GST components and total |
-| Payment | Receipt linked to an invoice |
-| Purchase | Supplier invoice and purchase header |
-| PurchaseItem | Material quantity and purchase rate |
-| ProductionRun | Planned/actual output, damage, labour and overhead |
-| ProductionConsumption | Planned and actual material use and stored unit cost |
-| StockMovement | Inventory event and quantity movement |
-| AuditLog | User action, entity reference, details and timestamp |
+| Access and auditing | User, AuditLog |
+| Masters | Product, Customer, Supplier, RawMaterial |
+| Manufacturing | BOM, BOMItem, ProductionRun, ProductionConsumption |
+| Procurement | Purchase, PurchaseItem |
+| Sales and finance | SalesOrder, SalesOrderItem, Invoice, Payment |
+| Inventory | StockMovement |
 
-Foreign keys connect the principal records. A production run links to a product and BOM; its consumption rows link to raw materials. An invoice links to a sales order, and a payment links to an invoice.
+### Key relationships
 
-## 4. Inventory model
+- A Product can have multiple BOM versions.
+- A BOM contains multiple BOMItems, each linked to a RawMaterial.
+- A ProductionRun references a Product and BOM and records actual material consumption.
+- A Purchase contains multiple PurchaseItems and increases raw-material stock.
+- A Customer can place multiple SalesOrders.
+- A SalesOrder contains SalesOrderItems and can generate an Invoice.
+- An Invoice can have multiple Payment records.
+- StockMovement records inventory changes, while AuditLog records important user actions.
 
-Inventory is represented as an append-only sequence of stock movement records rather than a manually edited quantity field.
+The design uses primary keys and foreign keys to maintain referential integrity. Stock is derived from recorded movements rather than relying only on manually editable balances.
 
-For an item:
+## 2. Inventory Management and Production Logic
 
-\[
-\text{Current balance} =
-\sum \text{incoming quantities} -
-\sum \text{outgoing quantities}
-\]
+### Stock movement approach
 
-Incoming movement types include:
-- `OPENING`
-- `PURCHASE`
-- `PRODUCTION_OUTPUT`
-- `STOCK_IN`
+Inventory is maintained through a central **StockMovement ledger**. Each movement records the item type, item ID, movement type, quantity, unit, reference, user and timestamp.
 
-Outgoing movement types include:
-- `PRODUCTION_ISSUE`
-- `DISPATCH`
-- `STOCK_OUT`
+Typical movements include:
+- Purchase receipt: increases raw-material stock.
+- Production consumption: decreases raw-material stock.
+- Production output: increases finished-goods stock.
+- Dispatch: decreases finished-goods stock.
 
-Every movement stores item type, item ID, quantity, unit, movement type, reference type/ID, notes, user and timestamp. The stock ledger reconstructs a running balance from the chronological movement stream.
+The stock balance is calculated by aggregating the relevant movements. Dispatch validation checks available finished stock before allowing a dispatch, preventing negative inventory.
 
-The dispatch workflow checks available finished stock before posting the outgoing movement. Production checks raw-material availability before recording issues and finished output.
+### BOM-based production
 
-## 5. BOM and production variance
+A Bill of Materials (BOM) specifies the standard material quantities required to manufacture a defined output quantity.
 
-The BOM defines standard material quantities for a planned batch. The production run stores planned output, actual good output, damaged quantity, actual material consumption, labour and overhead.
+For the benchmark Murukku 200g batch, the planned BOM output is 200 packets:
 
-For each material:
+| Material | Planned quantity | Actual quantity |
+|---|---:|---:|
+| Rice flour | 40 kg | 40 kg |
+| Cooking oil | 10 L | 10.5 L |
+| Spice mix | 1.2 kg | 1.2 kg |
+| 200g pouch | 200 | 194 |
+| Carton (20 packets) | 10 | 9 |
 
-\[
-\text{Consumption variance} =
-\text{Actual quantity} - \text{Planned quantity}
-\]
+The production run records planned output, actual good output, damaged quantity, actual consumption and production expenses.
+
+**Yield variance:**
 
 \[
-\text{Consumption variance \%} =
-\frac{\text{Actual} - \text{Planned}}{\text{Planned}}\times100
-\]
-
-For output:
-
-\[
-\text{Yield \%} =
-\frac{\text{Good output}}{\text{Planned output}}\times100
+\text{Yield variance} =
+\frac{\text{Actual good output}-\text{Planned output}}
+{\text{Planned output}}\times100
 \]
 
 \[
-\text{Yield variance (percentage points)} =
-\text{Yield \%} - 100
+=\frac{188-200}{200}\times100=-6\%
 \]
 
-Positive material variance indicates over-consumption; negative variance indicates usage below the BOM standard. Damaged output is reported separately from good output.
-
-## 6. Costing approach
-
-The prototype calculates production cost as:
+Oil consumption variance is:
 
 \[
-\text{Batch cost} =
-\text{Material cost} + \text{Labour} + \text{Overhead}
+\frac{10.5-10}{10}\times100=5\%
 \]
+
+Thus, the batch produced 188 good packets against 200 planned, with a 6% negative yield variance and 5% excess oil consumption.
+
+## 3. Costing and Inventory Valuation
+
+NammaFactory uses **weighted average costing** for raw-material valuation. The weighted average unit cost is calculated using opening inventory and purchases.
+
+For rice flour:
+
+\[
+\text{Weighted average cost} =
+\frac{(100\times42)+(60\times45)}{100+60}
+\]
+
+\[
+=₹43.125\text{ per kg}
+\]
+
+The 40 kg consumed in production therefore costs ₹1,725.
+
+### Benchmark production cost
+
+| Cost component | Calculation | Cost |
+|---|---|---:|
+| Rice flour | 40 × ₹43.125 | ₹1,725 |
+| Cooking oil | 10.5 × ₹140 | ₹1,470 |
+| Spice mix | 1.2 × ₹200 | ₹240 |
+| Pouches | 194 × ₹2.50 | ₹485 |
+| Cartons | 9 × ₹15 | ₹135 |
+| **Total material cost** | | **₹4,055** |
+| Labour | | ₹1,200 |
+| Gas and power overhead | | ₹600 |
+| **Total production cost** | | **₹5,855** |
 
 \[
 \text{Cost per good packet} =
-\frac{\text{Batch cost}}{\text{Good output}}
+\frac{₹5,855}{188}=₹31.14
 \]
 
-Material cost uses actual consumed quantity multiplied by the stored unit cost for the production consumption row.
+The unit production cost is calculated using actual good output, not planned output or total units including damaged products.
 
-For the benchmark flour purchase, periodic weighted-average cost is:
+### Benchmark stock reconciliation
 
-\[
-\frac{(100 \times ₹42)+(60 \times ₹45)}{100+60}
-= ₹43.125/\text{kg}
-\]
+| Item | Opening | Purchase / Production | Consumption / Dispatch | Closing |
+|---|---:|---:|---:|---:|
+| Rice flour (kg) | 100 | +60 | −40 | 120 |
+| Cooking oil (L) | 30 | – | −10.5 | 19.5 |
+| Spice mix (kg) | 5 | – | −1.2 | 3.8 |
+| Pouches | 500 | – | −194 | 306 |
+| Cartons | 30 | – | −9 | 21 |
+| Murukku packets | 50 | +188 | −150 | 88 |
 
-This is a simplified periodic weighted-average calculation based on opening balances and received purchases. It does not implement a full perpetual inventory valuation engine or cost-layer depletion.
+The finished-goods balance is 238 packets after production and 88 after dispatching 150 packets to Customer A. A subsequent order for 120 packets is blocked because only 88 packets are available.
 
-## 7. GST and receivables
+## 4. Sales, GST and Financial Tracking
 
-The prototype assumes the factory is in Tamil Nadu.
+Sales orders are entered by salesmen and remain pending until administrator approval. Approved orders can be invoiced and dispatched after stock validation.
 
-- A Tamil Nadu customer is treated as intrastate: CGST + SGST.
-- A customer in another state is treated as interstate: IGST.
+The invoice calculation applies:
+- **CGST + SGST** for sales within Tamil Nadu.
+- **IGST** for interstate sales, such as a sale to Karnataka.
 
-For the Sales A benchmark:
+For the benchmark sale to Customer A, the taxable amount is ₹7,500, CGST is ₹187.50 and SGST is ₹187.50, resulting in an invoice total of ₹7,875. A payment of ₹4,000 leaves ₹3,875 outstanding.
 
-| Component | Amount |
-|---|---:|
-| Taxable value | ₹7,500.00 |
-| CGST | ₹187.50 |
-| SGST | ₹187.50 |
-| IGST | ₹0.00 |
-| Invoice total | ₹7,875.00 |
-| Receipt | ₹4,000.00 |
-| Outstanding | ₹3,875.00 |
+The application also tracks payments, outstanding balances, sales registers, GST summaries and stock reports.
 
-Outstanding is calculated as invoice total less receipts allocated to that invoice. The reconciliation report classifies invoices as unpaid, partially paid, fully paid or overpaid. Ageing uses the invoice date and current date.
+## 5. Assumptions and Limitations
 
-This is an operational demonstration only, not a statutory GST engine or tax filing system.
+- The benchmark uses the quantities, prices and production expenses specified in the assignment.
+- The Murukku BOM is based on the supplied benchmark; other demonstration BOMs use illustrative values.
+- Weighted average costing is demonstrated using the available opening stock and purchase data.
+- The application is a functional prototype and is not certified for statutory GST filing or production accounting.
+- SQLite is suitable for the demonstration but would need migration to PostgreSQL for a larger multi-user deployment.
+- Advanced features such as offline synchronisation, batch-wise expiry tracking, FEFO, e-invoicing and e-waybill integration are not implemented.
 
-## 8. Benchmark scenario and expected results
-
-Opening inventory:
-- Flour 100 kg; oil 30 L; spice 5 kg; pouches 500; cartons 30; finished Murukku 50 packets.
-
-Purchase:
-- Flour 60 kg at ₹45/kg.
-
-Production:
-- BOM plan: 200 packets; flour 40 kg; oil 10 L; spice 1.2 kg; pouches 200; cartons 10.
-- Actual consumption: flour 40 kg; oil 10.5 L; spice 1.2 kg; 194 pouches; 9 cartons.
-- Good output 188 packets; damaged pouches 6.
-
-Expected inventory balances for the benchmark flow:
-- Flour: 100 + 60 − 40 = 120 kg.
-- Oil: 30 − 10.5 = 19.5 L.
-- Pouches: 500 − 194 = 306 pieces.
-- Finished Murukku after production: 50 + 188 = 238 packets.
-- Finished Murukku after dispatch of 150: 88 packets.
-
-Yield = 188/200 = 94%; yield variance = −6 percentage points. Oil consumption variance = (10.5−10)/10 = +5%.
-
-The assignment's costing assumptions produce:
-- Flour: 40 × ₹43.125 = ₹1,725.
-- Oil: 10.5 × ₹140 = ₹1,470.
-- Spice: 1.2 × ₹200 = ₹240.
-- Pouches: 194 × ₹2.50 = ₹485.
-- Cartons: 9 × ₹15 = ₹135.
-- Material total = ₹4,055.
-- Labour = ₹1,200; overhead = ₹600.
-- Total batch cost = ₹5,855.
-- Cost per good packet = ₹5,855/188 ≈ ₹31.14.
-
-The figures above are benchmark expectations. Actual reports depend on the transactions present in the local demo database. If extra test batches or dispatches were posted, balances and aggregate dashboard totals will differ.
-
-## 9. Integrity, audit and testing
-
-The application records audit events for key workflows and provides read-only audit trail and system-health pages. System health checks include negative stock, stock movement references/quantities, duplicate invoices per order, invoice arithmetic/GST consistency, payment allocations, production consumption completeness and invoice-to-order references.
-
-The reusable pure calculation functions are tested with pytest. The current business-logic suite contains 16 tests. The developer reported that all 16 passed locally.
-
-## 10. Known limitations and next engineering steps
-
-- Replace SQLite with PostgreSQL for multi-user production deployment.
-- Add database migrations, backup/restore procedures and concurrency testing.
-- Strengthen server-side authorization and session controls.
-- Add tamper-evident audit protection and formal reversal/credit-note workflows.
-- Implement full moving-average inventory valuation with issue valuation.
-- Add batch/lot, expiry and FEFO traceability.
-- Extend GST logic for statutory edge cases, GSTIN validation, e-invoice and e-way bill integrations.
-- Add automated integration tests against a disposable test database.
-- Add deployment configuration, secrets management, monitoring and operational logging.
-
+The design prioritises traceable stock movements, BOM-based production, cost transparency and validation across the purchase-to-production-to-sales workflow.
