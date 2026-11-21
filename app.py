@@ -1668,6 +1668,260 @@ def reporting_and_exports_page():
 
 
 
+
+def system_health_page():
+    """Read-only operational integrity checks across stock, sales and finance."""
+    db = SessionLocal()
+    try:
+        section_heading(
+            "🛡️ System Health & Data Integrity",
+            "Run consistency checks across inventory movements, invoices, payments and production records.",
+        )
+
+        checks = []
+
+        def add_check(name, status, count, details, recommendation):
+            checks.append({
+                "Check": name,
+                "Status": status,
+                "Issues": int(count),
+                "Findings": details,
+                "Recommended action": recommendation,
+            })
+
+        # Load the source records once for a consistent read-only snapshot.
+        materials = db.scalars(select(RawMaterial)).all()
+        products = db.scalars(select(Product)).all()
+        movements = db.scalars(
+            select(StockMovement).order_by(StockMovement.created_at.asc(), StockMovement.id.asc())
+        ).all()
+        invoices = db.scalars(select(Invoice)).all()
+        payments = db.scalars(select(Payment)).all()
+        orders = db.scalars(select(SalesOrder)).all()
+        runs = db.scalars(select(ProductionRun)).all()
+
+        # 1. Negative inventory balances.
+        balances = get_stock_balances(db)
+        item_names = {
+            ("RAW_MATERIAL", item.id): item.name for item in materials
+        }
+        item_names.update({
+            ("PRODUCT", item.id): item.name for item in products
+        })
+        negative_stock = []
+        for key, balance in balances.items():
+            if balance < 0:
+                negative_stock.append({
+                    "Item": item_names.get(key, f"{key[0]} #{key[1]}"),
+                    "Item type": key[0],
+                    "Balance": str(balance),
+                })
+        add_check(
+            "Negative stock balances",
+            "PASS" if not negative_stock else "WARNING",
+            len(negative_stock),
+            "No negative balances found." if not negative_stock else "; ".join(
+                f"{row['Item']}: {row['Balance']}" for row in negative_stock
+            ),
+            "Investigate missing receipts, duplicate issues or incorrect dispatch quantities.",
+        )
+
+        # 2. Invalid stock movement references and quantities.
+        invalid_movements = []
+        known_types = {
+            "OPENING", "PURCHASE", "PRODUCTION_OUTPUT", "STOCK_IN",
+            "PRODUCTION_ISSUE", "DISPATCH", "STOCK_OUT",
+        }
+        for movement in movements:
+            item_type = str(movement.item_type or "").upper()
+            quantity = Decimal(str(movement.quantity or 0))
+            valid_item = (
+                item_type == "RAW_MATERIAL" and movement.item_id in {x.id for x in materials}
+            ) or (
+                item_type == "PRODUCT" and movement.item_id in {x.id for x in products}
+            )
+            if quantity <= 0 or not valid_item or str(movement.movement_type or "").upper() not in known_types:
+                invalid_movements.append(
+                    f"Movement #{movement.id}: type={movement.movement_type}, "
+                    f"item={item_type} #{movement.item_id}, quantity={quantity}"
+                )
+        add_check(
+            "Stock movement validity",
+            "PASS" if not invalid_movements else "ERROR",
+            len(invalid_movements),
+            "All movement types, item references and quantities are valid."
+            if not invalid_movements else "; ".join(invalid_movements[:10]),
+            "Review the source transaction and correct it through an auditable adjustment; do not delete ledger history.",
+        )
+
+        # 3. Duplicate invoice per sales order.
+        invoices_by_order = {}
+        for invoice in invoices:
+            invoices_by_order.setdefault(invoice.order_id, []).append(invoice)
+        duplicate_invoice_orders = {
+            order_id: rows for order_id, rows in invoices_by_order.items() if len(rows) > 1
+        }
+        duplicate_details = [
+            f"Order #{order_id}: {', '.join(row.invoice_number for row in rows)}"
+            for order_id, rows in duplicate_invoice_orders.items()
+        ]
+        add_check(
+            "Duplicate invoices per order",
+            "PASS" if not duplicate_details else "ERROR",
+            len(duplicate_details),
+            "No sales order has multiple invoices." if not duplicate_details else "; ".join(duplicate_details),
+            "Review duplicate invoice records and resolve with a documented credit note or cancellation workflow.",
+        )
+
+        # 4. Invoice arithmetic and GST component consistency.
+        invoice_errors = []
+        for invoice in invoices:
+            taxable = Decimal(str(invoice.taxable_amount or 0))
+            cgst = Decimal(str(invoice.cgst or 0))
+            sgst = Decimal(str(invoice.sgst or 0))
+            igst = Decimal(str(invoice.igst or 0))
+            total = Decimal(str(invoice.total_amount or 0))
+            calculated = (taxable + cgst + sgst + igst).quantize(Decimal("0.01"))
+            if calculated != total:
+                invoice_errors.append(
+                    f"{invoice.invoice_number}: stored total ₹{total}, calculated ₹{calculated}"
+                )
+            if igst > 0 and (cgst != 0 or sgst != 0):
+                invoice_errors.append(
+                    f"{invoice.invoice_number}: IGST and CGST/SGST are both populated"
+                )
+            if cgst != sgst:
+                invoice_errors.append(
+                    f"{invoice.invoice_number}: CGST ₹{cgst} differs from SGST ₹{sgst}"
+                )
+        add_check(
+            "Invoice and GST arithmetic",
+            "PASS" if not invoice_errors else "ERROR",
+            len(invoice_errors),
+            "Invoice totals and GST components are internally consistent."
+            if not invoice_errors else "; ".join(invoice_errors[:10]),
+            "Check invoice line calculations, tax type and rounding before issuing or reconciling.",
+        )
+
+        # 5. Payment allocations and outstanding balances.
+        payment_totals = {}
+        orphan_payments = []
+        invalid_payments = []
+        invoice_ids = {invoice.id for invoice in invoices}
+        for payment in payments:
+            amount = Decimal(str(payment.amount or 0))
+            payment_totals[payment.invoice_id] = payment_totals.get(
+                payment.invoice_id, Decimal("0")
+            ) + amount
+            if payment.invoice_id not in invoice_ids:
+                orphan_payments.append(f"Payment #{payment.id} references missing invoice #{payment.invoice_id}")
+            if amount <= 0:
+                invalid_payments.append(f"Payment #{payment.id} has amount {amount}")
+
+        overpaid_invoices = []
+        for invoice in invoices:
+            paid = payment_totals.get(invoice.id, Decimal("0"))
+            total = Decimal(str(invoice.total_amount or 0))
+            if paid > total:
+                overpaid_invoices.append(
+                    f"{invoice.invoice_number}: receipts ₹{paid} exceed invoice ₹{total}"
+                )
+        payment_issues = orphan_payments + invalid_payments + overpaid_invoices
+        add_check(
+            "Payment allocation integrity",
+            "PASS" if not payment_issues else "WARNING",
+            len(payment_issues),
+            "Payment references and allocations are valid."
+            if not payment_issues else "; ".join(payment_issues[:10]),
+            "Verify receipt references and invoice allocation; investigate overpayments rather than hiding them.",
+        )
+
+        # 6. Production record completeness.
+        consumption_run_ids = {
+            row.production_run_id
+            for row in db.scalars(select(ProductionConsumption)).all()
+        }
+        production_without_consumption = [
+            run.batch_number for run in runs if run.id not in consumption_run_ids
+        ]
+        invalid_production = []
+        for run in runs:
+            planned = Decimal(str(run.planned_output or 0))
+            good = Decimal(str(run.actual_good_output or 0))
+            damaged = Decimal(str(run.damaged_quantity or 0))
+            if planned <= 0 or good < 0 or damaged < 0:
+                invalid_production.append(
+                    f"{run.batch_number}: planned={planned}, good={good}, damaged={damaged}"
+                )
+        production_issues = invalid_production + [
+            f"{batch}: no consumption rows" for batch in production_without_consumption
+        ]
+        add_check(
+            "Production record completeness",
+            "PASS" if not production_issues else "WARNING",
+            len(production_issues),
+            "Production runs have consumption details and valid output quantities."
+            if not production_issues else "; ".join(production_issues[:10]),
+            "Review legacy/test batches and confirm every completed run records material consumption and output.",
+        )
+
+        # 7. Order/invoice linkage.
+        order_ids = {order.id for order in orders}
+        orphan_invoices = [
+            invoice.invoice_number for invoice in invoices if invoice.order_id not in order_ids
+        ]
+        add_check(
+            "Invoice-to-order references",
+            "PASS" if not orphan_invoices else "ERROR",
+            len(orphan_invoices),
+            "Every invoice references an existing sales order."
+            if not orphan_invoices else ", ".join(orphan_invoices),
+            "Investigate missing order references before financial reporting.",
+        )
+
+        # Summary
+        error_count = sum(1 for item in checks if item["Status"] == "ERROR")
+        warning_count = sum(1 for item in checks if item["Status"] == "WARNING")
+        passed_count = sum(1 for item in checks if item["Status"] == "PASS")
+
+        st.subheader("Integrity check summary")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Checks run", len(checks))
+        c2.metric("Passed", passed_count)
+        c3.metric("Warnings", warning_count)
+        c4.metric("Errors", error_count)
+
+        if error_count:
+            st.error("Critical data integrity issues were detected. Review the findings below.")
+        elif warning_count:
+            st.warning("Some records need review. No critical errors were detected.")
+        else:
+            st.success("All current system integrity checks passed.")
+
+        st.divider()
+        section_heading("Detailed check results")
+        results_df = pd.DataFrame(checks)
+        st.dataframe(results_df, use_container_width=True, hide_index=True)
+
+        st.download_button(
+            "Download system health report (CSV)",
+            data=results_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="NammaFactory_System_Health_Report.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        st.caption(
+            "This page performs read-only diagnostics. It never edits stock, invoices, payments or production history. "
+            "Warnings can include older test batches that were created before consumption tracking was added."
+        )
+
+    except Exception as exc:
+        st.error(f"Unable to complete system health checks: {exc}")
+    finally:
+        db.close()
+
+
 def gst_reconciliation_page():
     """Period-based GST summary and invoice-to-payment reconciliation."""
     db = SessionLocal()
@@ -2683,6 +2937,7 @@ ROLE_PAGES = {
         "Production",
         "Purchases",
         "Reports",
+        "System Health",
         "Audit Trail",
     ],
 
@@ -2707,6 +2962,7 @@ ROLE_PAGES = {
         "Payments",
         "Financial Reports",
         "GST & Reconciliation",
+        "System Health",
         "Stock Ledger",
         "Audit Trail",
     ],
@@ -2716,6 +2972,7 @@ ROLE_PAGES = {
         "Business Analytics",
         "Production Intelligence",
         "GST & Reconciliation",
+        "System Health",
         "Reports",
         "Stock Ledger",
         "Audit Trail",
@@ -2771,6 +3028,10 @@ def show_workspace_page(role, page, user):
         elif page == "Stock Ledger":
 
             render_stock_ledger_page()
+
+        elif page == "System Health":
+
+            system_health_page()
 
         elif page == "Audit Trail":
 
@@ -2940,6 +3201,10 @@ def show_workspace_page(role, page, user):
 
             render_stock_ledger_page()
 
+        elif page == "System Health":
+
+            system_health_page()
+
         elif page == "Audit Trail":
 
             render_audit_trail_page()
@@ -2973,6 +3238,10 @@ def show_workspace_page(role, page, user):
         elif page == "GST & Reconciliation":
 
             gst_reconciliation_page()
+
+        elif page == "System Health":
+
+            system_health_page()
 
         elif page == "Reports":
 
