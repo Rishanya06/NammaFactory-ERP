@@ -38,6 +38,14 @@ from models import (
 
 from modules.authentication import authenticate_user, logout
 
+from utils.business_logic import (
+    money,
+    is_intrastate_customer,
+    calculate_stock_balances,
+    calculate_weighted_average_cost,
+    calculate_invoice_totals,
+)
+
 
 # ============================================================
 # 1. APPLICATION CONFIGURATION
@@ -386,87 +394,14 @@ def get_user_orders(db, user_id):
 
 
 def get_stock_balances(db):
-
-    movements = db.scalars(
-        select(StockMovement)
-    ).all()
-
-    balances = {}
-
-    incoming = {
-        "OPENING",
-        "PURCHASE",
-        "PRODUCTION_OUTPUT",
-        "STOCK_IN",
-    }
-
-    outgoing = {
-        "PRODUCTION_ISSUE",
-        "DISPATCH",
-        "STOCK_OUT",
-    }
-
-    for movement in movements:
-
-        key = (movement.item_type, movement.item_id)
-
-        if key not in balances:
-            balances[key] = Decimal("0")
-
-        movement_type = movement.movement_type.upper()
-
-        if movement_type in incoming:
-            balances[key] += Decimal(str(movement.quantity))
-
-        elif movement_type in outgoing:
-            balances[key] -= Decimal(str(movement.quantity))
-
-    return balances
+    movements = db.scalars(select(StockMovement)).all()
+    return calculate_stock_balances(movements)
 
 
 def get_invoice_totals(db):
-
-    invoices = db.scalars(
-        select(Invoice)
-    ).all()
-
-    payments = db.scalars(
-        select(Payment)
-    ).all()
-
-    invoice_total = sum(
-        (Decimal(str(i.total_amount)) for i in invoices),
-        Decimal("0"),
-    )
-
-    payment_total = sum(
-        (Decimal(str(p.amount)) for p in payments),
-        Decimal("0"),
-    )
-
-    taxable_total = sum(
-        (Decimal(str(i.taxable_amount)) for i in invoices),
-        Decimal("0"),
-    )
-
-    gst_total = sum(
-        (
-            Decimal(str(i.cgst))
-            + Decimal(str(i.sgst))
-            + Decimal(str(i.igst))
-            for i in invoices
-        ),
-        Decimal("0"),
-    )
-
-    return {
-        "invoice_total": invoice_total,
-        "payment_total": payment_total,
-        "outstanding": invoice_total - payment_total,
-        "taxable_total": taxable_total,
-        "gst_total": gst_total,
-        "invoice_count": len(invoices),
-    }
+    invoices = db.scalars(select(Invoice)).all()
+    payments = db.scalars(select(Payment)).all()
+    return calculate_invoice_totals(invoices, payments)
 
 
 def format_currency(value):
@@ -475,20 +410,7 @@ def format_currency(value):
 
 
 def get_weighted_average_unit_cost(db, material):
-    """Calculate moving weighted-average cost from opening stock and received purchases."""
-    opening_rates = {
-        "RM-FLOUR": (Decimal("100"), Decimal("42.00")),
-        "RM-OIL": (Decimal("30"), Decimal("140.00")),
-        "RM-SPICE": (Decimal("5"), Decimal("200.00")),
-        "PKG-POUCH": (Decimal("500"), Decimal("2.50")),
-        "PKG-CARTON": (Decimal("30"), Decimal("15.00")),
-    }
-    opening_qty, opening_rate = opening_rates.get(
-        material.sku, (Decimal("0"), Decimal("0"))
-    )
-    total_qty = opening_qty
-    total_value = opening_qty * opening_rate
-
+    """Calculate periodic weighted-average cost from opening stock and received purchases."""
     received_items = db.scalars(
         select(PurchaseItem)
         .join(Purchase, PurchaseItem.purchase_id == Purchase.id)
@@ -497,18 +419,7 @@ def get_weighted_average_unit_cost(db, material):
             Purchase.status == "RECEIVED",
         )
     ).all()
-
-    for item in received_items:
-        qty = Decimal(str(item.quantity or 0))
-        rate = Decimal(str(item.unit_price or 0))
-        total_qty += qty
-        total_value += qty * rate
-
-    if total_qty <= 0:
-        return BENCHMARK_UNIT_COSTS.get(material.sku, Decimal("0.00"))
-    return (total_value / total_qty).quantize(
-        Decimal("0.0001"), rounding=ROUND_HALF_UP
-    )
+    return calculate_weighted_average_cost(material.sku, received_items)
 
 
 # ============================================================
@@ -3255,24 +3166,6 @@ def show_workspace_page(role, page, user):
 # ============================================================
 # GST INVOICE GENERATION
 # ============================================================
-
-def money(value):
-    return Decimal(str(value)).quantize(
-        Decimal("0.01"),
-        rounding=ROUND_HALF_UP,
-    )
-
-
-def is_intrastate_customer(customer_state):
-    """Compare the customer's state with the factory's Tamil Nadu state."""
-    normalized = (customer_state or "").strip().lower()
-    tamil_nadu_names = {
-        "tamil nadu",
-        "tamilnadu",
-        "tn",
-    }
-    return normalized in tamil_nadu_names
-
 
 def build_invoice_pdf(db, invoice):
     """Create a GST invoice PDF in memory and return its bytes."""
