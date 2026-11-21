@@ -852,107 +852,269 @@ def accountant_dashboard(db):
 # ============================================================
 
 def owner_dashboard(db):
+    """Owner-facing summary of finance, production, inventory and recent activity."""
 
     page_header(
-        "Executive Business Intelligence",
-        "A consolidated view of manufacturing and business performance.",
+        "Owner Dashboard",
+        "A live overview of sales, cash collection, manufacturing efficiency and inventory health.",
     )
 
+    # -------------------------
+    # Pull current business data
+    # -------------------------
     totals = get_invoice_totals(db)
 
-    runs = db.scalars(
-        select(ProductionRun)
+    invoices = db.scalars(
+        select(Invoice).order_by(Invoice.invoice_date.desc())
     ).all()
 
+    runs = db.scalars(
+        select(ProductionRun).order_by(ProductionRun.production_date.desc())
+    ).all()
+
+    purchases = db.scalars(
+        select(Purchase).order_by(Purchase.purchase_date.desc())
+    ).all()
+
+    materials = db.scalars(
+        select(RawMaterial).where(RawMaterial.is_active == True)
+    ).all()
+
+    products = db.scalars(
+        select(Product).where(Product.is_active == True)
+    ).all()
+
+    balances = get_stock_balances(db)
+
     production_output = sum(
-        (
-            Decimal(str(r.actual_good_output))
-            for r in runs
-        ),
+        (Decimal(str(run.actual_good_output or 0)) for run in runs),
         Decimal("0"),
     )
-
     planned_output = sum(
+        (Decimal(str(run.planned_output or 0)) for run in runs),
+        Decimal("0"),
+    )
+    damaged_units = sum(
+        (Decimal(str(run.damaged_quantity or 0)) for run in runs),
+        Decimal("0"),
+    )
+    production_yield = (
+        production_output / planned_output * Decimal("100")
+        if planned_output > 0 else Decimal("0")
+    )
+
+    purchase_spend = sum(
         (
-            Decimal(str(r.planned_output))
-            for r in runs
+            Decimal(str(p.total_amount or 0))
+            for p in purchases
+            if str(p.status).upper() in {"RECEIVED", "POSTED", "COMPLETED"}
         ),
         Decimal("0"),
     )
 
-    production_yield = (
-        production_output / planned_output * 100
-        if planned_output > 0
-        else Decimal("0")
-    )
+    # -------------------------
+    # KPI row
+    # -------------------------
+    st.subheader("Business at a glance")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Taxable Revenue", format_currency(totals["taxable_total"]))
+    k2.metric("Customer Collections", format_currency(totals["payment_total"]))
+    k3.metric("Outstanding Receivables", format_currency(totals["outstanding"]))
+    k4.metric("Purchase Spend", format_currency(purchase_spend))
 
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric(
-        "Taxable Revenue",
-        format_currency(totals["taxable_total"]),
-    )
-
-    c2.metric(
-        "Production Batches",
-        len(runs),
-    )
-
-    c3.metric(
-        "Good Units Produced",
-        f"{production_output:,.0f}",
-    )
-
-    c4.metric(
-        "Production Yield",
-        f"{production_yield:.2f}%",
-    )
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric("Production Batches", f"{len(runs):,}")
+    k6.metric("Good Units Produced", f"{production_output:,.0f}")
+    k7.metric("Average Production Yield", f"{production_yield:.2f}%")
+    k8.metric("Damaged Units", f"{damaged_units:,.0f}")
 
     st.divider()
 
+    # -------------------------
+    # Sales trend
+    # -------------------------
     left, right = st.columns(2)
 
     with left:
+        section_heading("📈 Monthly Sales")
+        monthly_sales = {}
+        for invoice in invoices:
+            invoice_date = invoice.invoice_date
+            if invoice_date:
+                month_key = invoice_date.strftime("%Y-%m")
+                monthly_sales[month_key] = monthly_sales.get(month_key, Decimal("0")) + Decimal(
+                    str(invoice.taxable_amount or 0)
+                )
 
-        section_heading("💰 Financial Performance")
-
-        st.metric(
-            "Invoice Value",
-            format_currency(totals["invoice_total"]),
-        )
-
-        st.metric(
-            "Outstanding",
-            format_currency(totals["outstanding"]),
-        )
+        if monthly_sales:
+            sales_frame = pd.DataFrame(
+                [{"Month": month, "Taxable sales (₹)": float(value)}
+                 for month, value in sorted(monthly_sales.items())]
+            ).set_index("Month")
+            st.bar_chart(sales_frame, use_container_width=True)
+        else:
+            st.info("No invoices have been generated yet. Monthly sales will appear here.")
 
     with right:
-
-        section_heading("🏭 Manufacturing Performance")
-
-        st.metric(
-            "Good Production Output",
-            f"{production_output:,.0f}",
-        )
-
-        st.metric(
-            "Production Yield",
-            f"{production_yield:.2f}%",
-        )
+        section_heading("🏭 Production Output")
+        if runs:
+            production_rows = []
+            for run in reversed(runs[:12]):
+                label = run.batch_number
+                production_rows.append({
+                    "Batch": label,
+                    "Good output": float(Decimal(str(run.actual_good_output or 0))),
+                    "Planned output": float(Decimal(str(run.planned_output or 0))),
+                })
+            production_frame = pd.DataFrame(production_rows).set_index("Batch")
+            st.bar_chart(production_frame, use_container_width=True)
+        else:
+            st.info("No production runs have been recorded yet.")
 
     st.divider()
 
-    section_heading("Management Priorities")
+    # -------------------------
+    # Inventory health
+    # -------------------------
+    section_heading("📦 Inventory Health")
 
-    st.markdown(
-        """
-        - Improve production efficiency.
-        - Monitor raw material price changes.
-        - Reduce manufacturing wastage.
-        - Improve cost per packet.
-        - Monitor customer payment collection.
-        """)
+    low_stock_rows = []
+    inventory_rows = []
 
+    for material in materials:
+        quantity = balances.get(("RAW_MATERIAL", material.id), Decimal("0"))
+        reorder = Decimal(str(material.reorder_level or 0))
+        inventory_rows.append({
+            "Material": material.name,
+            "Available": float(quantity),
+            "Unit": material.base_unit,
+            "Reorder level": float(reorder),
+            "Status": "REORDER" if quantity <= reorder else "OK",
+        })
+        if quantity <= reorder:
+            low_stock_rows.append({
+                "Item": material.name,
+                "Available": f"{quantity:,.3f} {material.base_unit}",
+                "Reorder level": f"{reorder:,.3f} {material.base_unit}",
+            })
+
+    for product in products:
+        quantity = balances.get(("PRODUCT", product.id), Decimal("0"))
+        inventory_rows.append({
+            "Material": product.name,
+            "Available": float(quantity),
+            "Unit": product.unit,
+            "Reorder level": None,
+            "Status": "CHECK STOCK" if quantity <= 0 else "OK",
+        })
+
+    inv_left, inv_right = st.columns([1, 1.4])
+    with inv_left:
+        if low_stock_rows:
+            st.warning(f"{len(low_stock_rows)} raw material(s) at or below reorder level.")
+            st.dataframe(pd.DataFrame(low_stock_rows), use_container_width=True, hide_index=True)
+        else:
+            st.success("All active raw materials are above their reorder levels.")
+
+    with inv_right:
+        if inventory_rows:
+            inventory_frame = pd.DataFrame(inventory_rows)
+            st.dataframe(inventory_frame, use_container_width=True, hide_index=True)
+        else:
+            st.info("No inventory master records are available.")
+
+    st.divider()
+
+    # -------------------------
+    # Production costing
+    # -------------------------
+    section_heading("🧾 Production Cost Snapshot")
+
+    cost_rows = []
+    total_batch_cost = Decimal("0")
+    total_costed_output = Decimal("0")
+
+    for run in runs:
+        consumptions = db.scalars(
+            select(ProductionConsumption).where(
+                ProductionConsumption.production_run_id == run.id
+            )
+        ).all()
+
+        material_cost = sum(
+            (
+                Decimal(str(item.actual_quantity or 0))
+                * Decimal(str(item.unit_cost or 0))
+                for item in consumptions
+            ),
+            Decimal("0"),
+        )
+        labour = Decimal(str(run.labour_cost or 0))
+        overhead = Decimal(str(run.overhead_cost or 0))
+        batch_cost = material_cost + labour + overhead
+        good_output = Decimal(str(run.actual_good_output or 0))
+        unit_cost = batch_cost / good_output if good_output > 0 else Decimal("0")
+
+        if good_output > 0:
+            total_batch_cost += batch_cost
+            total_costed_output += good_output
+
+        cost_rows.append({
+            "Batch": run.batch_number,
+            "Good packets": f"{good_output:,.0f}",
+            "Material cost": format_currency(material_cost),
+            "Labour": format_currency(labour),
+            "Overhead": format_currency(overhead),
+            "Total batch cost": format_currency(batch_cost),
+            "Cost / good packet": format_currency(unit_cost),
+        })
+
+    average_unit_cost = (
+        total_batch_cost / total_costed_output
+        if total_costed_output > 0 else Decimal("0")
+    )
+
+    c1, c2 = st.columns(2)
+    c1.metric("Weighted average cost per good packet", format_currency(average_unit_cost))
+    c2.metric("Costed production output", f"{total_costed_output:,.0f} packets")
+
+    if cost_rows:
+        st.dataframe(pd.DataFrame(cost_rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "Cost per packet is calculated from recorded material consumption, labour and overhead "
+            "for each production run. It is a production-cost measure, not a selling-price margin."
+        )
+    else:
+        st.info("Production cost details will appear after a production run is completed.")
+
+    st.divider()
+
+    # -------------------------
+    # Recent audit activity
+    # -------------------------
+    section_heading("🕒 Recent Business Activity")
+    recent_events = db.scalars(
+        select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(8)
+    ).all()
+
+    if recent_events:
+        activity_rows = []
+        for event in recent_events:
+            activity_rows.append({
+                "Time": event.timestamp.strftime("%d %b %Y, %I:%M %p") if event.timestamp else "—",
+                "Action": event.action,
+                "Record type": event.entity_type,
+                "Record ID": event.entity_id,
+                "Details": event.details or "",
+            })
+        st.dataframe(pd.DataFrame(activity_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No audit activity has been recorded yet.")
+
+    st.caption(
+        "Dashboard figures are calculated from the current NammaFactory database. "
+        "Inventory is derived from stock movements rather than manually editable balances."
+    )
 
 def purchase_management_page(user):
     """Record supplier purchases and receive raw materials into stock."""
