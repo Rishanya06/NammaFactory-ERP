@@ -204,7 +204,7 @@ class ProductionConsumption(Base):
     planned_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3))
     actual_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3))
     unit: Mapped[str] = mapped_column(String(20))
-    unit_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(12, 4))
 
 
 # --------------------------------------------------
