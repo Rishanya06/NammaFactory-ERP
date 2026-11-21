@@ -1664,6 +1664,234 @@ def reporting_and_exports_page():
         db.close()
 
 
+
+def stock_ledger_page(db):
+    """Read-only stock movement ledger with per-item running balances."""
+
+    section_heading(
+        "📚 Stock Ledger",
+        "Trace every receipt, production issue, production output and dispatch with a running balance.",
+    )
+
+    raw_materials = db.scalars(
+        select(RawMaterial).order_by(RawMaterial.name)
+    ).all()
+    products = db.scalars(
+        select(Product).order_by(Product.name)
+    ).all()
+    movements = db.scalars(
+        select(StockMovement).order_by(
+            StockMovement.created_at.asc(),
+            StockMovement.id.asc(),
+        )
+    ).all()
+
+    item_names = {}
+    item_units = {}
+    for material in raw_materials:
+        key = ("RAW_MATERIAL", material.id)
+        item_names[key] = material.name
+        item_units[key] = material.base_unit
+    for product in products:
+        key = ("PRODUCT", product.id)
+        item_names[key] = product.name
+        item_units[key] = product.unit
+
+    incoming_types = {"OPENING", "PURCHASE", "PRODUCTION_OUTPUT", "STOCK_IN"}
+    outgoing_types = {"PRODUCTION_ISSUE", "DISPATCH", "STOCK_OUT"}
+
+    # Calculate running balances over the entire chronological ledger first.
+    # Filtering is applied only after this calculation so opening balances
+    # and earlier movements are never accidentally excluded.
+    running_balances = {}
+    ledger_rows = []
+
+    users = db.scalars(select(User)).all()
+    user_names = {u.id: u.full_name or u.username for u in users}
+
+    for movement in movements:
+        item_key = (str(movement.item_type).upper(), movement.item_id)
+        item_name = item_names.get(
+            item_key,
+            f"Unknown item ({movement.item_type} #{movement.item_id})",
+        )
+        unit = movement.unit or item_units.get(item_key, "")
+        quantity = Decimal(str(movement.quantity or 0))
+        movement_type = str(movement.movement_type or "").upper()
+
+        if movement_type in incoming_types:
+            signed_quantity = quantity
+            direction = "IN"
+        elif movement_type in outgoing_types:
+            signed_quantity = -quantity
+            direction = "OUT"
+        else:
+            signed_quantity = Decimal("0")
+            direction = "OTHER"
+
+        running_balances[item_key] = (
+            running_balances.get(item_key, Decimal("0")) + signed_quantity
+        )
+
+        ledger_rows.append({
+            "Movement ID": movement.id,
+            "Date & Time": (
+                movement.created_at.strftime("%d %b %Y, %I:%M:%S %p")
+                if movement.created_at else "—"
+            ),
+            "_timestamp": movement.created_at,
+            "Item": item_name,
+            "_item_key": item_key,
+            "Item Type": str(movement.item_type),
+            "Movement": movement_type,
+            "Direction": direction,
+            "Quantity": float(quantity),
+            "Signed Quantity": float(signed_quantity),
+            "Unit": unit,
+            "Running Balance": float(running_balances[item_key]),
+            "Reference": (
+                f"{movement.reference_type or ''} "
+                f"{movement.reference_id or ''}".strip()
+            ),
+            "Performed By": user_names.get(movement.created_by, "System"),
+            "Notes": movement.notes or "",
+        })
+
+    if not ledger_rows:
+        st.info("No stock movements have been recorded yet.")
+        return
+
+    ledger_df = pd.DataFrame(ledger_rows)
+
+    # Current stock summary
+    current_balances = get_stock_balances(db)
+    summary_rows = []
+    for key, item_name in item_names.items():
+        summary_rows.append({
+            "Item": item_name,
+            "Type": key[0],
+            "Current Balance": float(current_balances.get(key, Decimal("0"))),
+            "Unit": item_units.get(key, ""),
+        })
+
+    section_heading("Current stock position")
+    st.dataframe(
+        pd.DataFrame(summary_rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.divider()
+    section_heading("Filter stock movements")
+
+    f1, f2, f3 = st.columns(3)
+    item_labels = {
+        f"{item_names[key]} ({key[0].replace('_', ' ').title()})": key
+        for key in item_names
+    }
+    with f1:
+        selected_item_label = st.selectbox(
+            "Item",
+            ["All items"] + sorted(item_labels.keys()),
+        )
+    with f2:
+        movement_options = ["All movements"] + sorted(
+            ledger_df["Movement"].dropna().unique().tolist()
+        )
+        selected_movement = st.selectbox("Movement type", movement_options)
+    with f3:
+        direction_filter = st.selectbox(
+            "Direction",
+            ["All", "IN", "OUT", "OTHER"],
+        )
+
+    search_term = st.text_input(
+        "Search reference, notes or user",
+        placeholder="e.g. purchase invoice, batch number, order number...",
+    )
+
+    timestamps = [v.date() for v in ledger_df["_timestamp"] if v is not None]
+    if timestamps:
+        date_filter = st.date_input(
+            "Movement date range",
+            value=(min(timestamps), max(timestamps)),
+            min_value=min(timestamps),
+            max_value=max(timestamps),
+        )
+    else:
+        date_filter = ()
+
+    filtered = ledger_df.copy()
+    if selected_item_label != "All items":
+        chosen_key = item_labels[selected_item_label]
+        filtered = filtered[filtered["_item_key"] == chosen_key]
+    if selected_movement != "All movements":
+        filtered = filtered[filtered["Movement"] == selected_movement]
+    if direction_filter != "All":
+        filtered = filtered[filtered["Direction"] == direction_filter]
+
+    if search_term.strip():
+        term = search_term.strip().lower()
+        searchable = (
+            filtered["Reference"].fillna("").str.lower()
+            + " " + filtered["Notes"].fillna("").str.lower()
+            + " " + filtered["Performed By"].fillna("").str.lower()
+        )
+        filtered = filtered[searchable.str.contains(term, regex=False)]
+
+    if isinstance(date_filter, (tuple, list)) and len(date_filter) == 2:
+        start_date, end_date = date_filter
+        filtered = filtered[
+            filtered["_timestamp"].apply(
+                lambda value: value is not None
+                and start_date <= value.date() <= end_date
+            )
+        ]
+
+    st.caption(
+        f"Showing {len(filtered):,} of {len(ledger_df):,} stock movements. "
+        "Running balances are calculated from the complete ledger before filters are applied."
+    )
+
+    display_columns = [
+        "Movement ID", "Date & Time", "Item", "Item Type",
+        "Movement", "Direction", "Quantity", "Unit",
+        "Running Balance", "Reference", "Performed By", "Notes",
+    ]
+    display_df = filtered.sort_values(
+        ["_timestamp", "Movement ID"],
+        ascending=[False, False],
+        na_position="last",
+    )[display_columns]
+
+    if display_df.empty:
+        st.info("No stock movements match the selected filters.")
+    else:
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Quantity": st.column_config.NumberColumn(format="%.3f"),
+                "Running Balance": st.column_config.NumberColumn(format="%.3f"),
+            },
+        )
+
+    csv_bytes = display_df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "Download filtered stock ledger (CSV)",
+        data=csv_bytes,
+        file_name="NammaFactory_Stock_Ledger.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    st.caption(
+        "This ledger is read-only. Stock balances are derived from recorded stock movements; "
+        "the page does not directly edit inventory quantities."
+    )
+
+
 def audit_trail_page(db):
     """Read-only, filterable audit history for authorized management roles."""
 
@@ -1819,6 +2047,16 @@ def audit_trail_page(db):
 
 
 
+
+def render_stock_ledger_page():
+    """Open and reliably close the database session for the stock ledger."""
+    db = SessionLocal()
+    try:
+        stock_ledger_page(db)
+    finally:
+        db.close()
+
+
 def render_audit_trail_page():
     """Open and reliably close the database session for the audit page."""
     db = SessionLocal()
@@ -1839,9 +2077,11 @@ ROLE_PAGES = {
         "Sales & Orders",
         "Dispatch",
         "Inventory",
+        "Stock Ledger",
         "Production",
         "Purchases",
         "Reports",
+        "Stock Ledger",
         "Audit Trail",
     ],
 
@@ -1857,6 +2097,7 @@ ROLE_PAGES = {
         "Production Entry",
         "BOM Management",
         "Inventory",
+        "Stock Ledger",
     ],
 
     "accountant": [
@@ -1864,6 +2105,7 @@ ROLE_PAGES = {
         "Invoices",
         "Payments",
         "Financial Reports",
+        "Stock Ledger",
         "Audit Trail",
     ],
 
@@ -1906,6 +2148,10 @@ def show_workspace_page(role, page, user):
 
             show_inventory_page()
 
+        elif page == "Stock Ledger":
+
+            render_stock_ledger_page()
+
         elif page == "Production":
 
             production_entry_page(user)
@@ -1917,6 +2163,10 @@ def show_workspace_page(role, page, user):
         elif page == "Reports":
 
             reporting_and_exports_page()
+
+        elif page == "Stock Ledger":
+
+            render_stock_ledger_page()
 
         elif page == "Audit Trail":
 
@@ -2056,6 +2306,10 @@ def show_workspace_page(role, page, user):
 
             show_inventory_page()
 
+        elif page == "Stock Ledger":
+
+            render_stock_ledger_page()
+
     # --------------------------------------------------------
     # ACCOUNTANT WORKSPACE
     # --------------------------------------------------------
@@ -2073,6 +2327,10 @@ def show_workspace_page(role, page, user):
         elif page == "Financial Reports":
 
             reporting_and_exports_page()
+
+        elif page == "Stock Ledger":
+
+            render_stock_ledger_page()
 
         elif page == "Audit Trail":
 
