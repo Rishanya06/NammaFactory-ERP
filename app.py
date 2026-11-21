@@ -1665,6 +1665,150 @@ def reporting_and_exports_page():
 
 
 
+
+def production_intelligence_page():
+    """Owner-facing planned-versus-actual manufacturing analysis."""
+    db = SessionLocal()
+    try:
+        section_heading(
+            "🏭 Production Intelligence",
+            "Understand batch yield, material consumption variance and the cost of good production.",
+        )
+        runs = db.scalars(
+            select(ProductionRun).order_by(
+                ProductionRun.production_date.desc(), ProductionRun.id.desc()
+            )
+        ).all()
+        if not runs:
+            st.info("Complete a production run to start building production intelligence.")
+            return
+
+        product_lookup = {x.id: x.name for x in db.scalars(select(Product)).all()}
+        material_lookup = {x.id: x.name for x in db.scalars(select(RawMaterial)).all()}
+
+        batch_rows, variance_rows = [], []
+        total_planned = total_good = total_damaged = Decimal("0")
+        total_cost = costed_output = Decimal("0")
+
+        for run in runs:
+            planned = Decimal(str(run.planned_output or 0))
+            good = Decimal(str(run.actual_good_output or 0))
+            damaged = Decimal(str(run.damaged_quantity or 0))
+            yield_pct = good / planned * Decimal("100") if planned > 0 else Decimal("0")
+            material_cost = Decimal("0")
+
+            consumptions = db.scalars(
+                select(ProductionConsumption).where(
+                    ProductionConsumption.production_run_id == run.id
+                )
+            ).all()
+
+            for item in consumptions:
+                standard = Decimal(str(item.planned_quantity or 0))
+                actual = Decimal(str(item.actual_quantity or 0))
+                difference = actual - standard
+                variance_pct = difference / standard * Decimal("100") if standard > 0 else Decimal("0")
+                rate = Decimal(str(item.unit_cost or 0))
+                line_cost = actual * rate
+                material_cost += line_cost
+                variance_rows.append({
+                    "Batch": run.batch_number,
+                    "Product": product_lookup.get(run.product_id, "Unknown"),
+                    "Material": material_lookup.get(item.raw_material_id, "Unknown"),
+                    "Planned quantity": float(standard),
+                    "Actual quantity": float(actual),
+                    "Variance quantity": float(difference),
+                    "Variance %": round(float(variance_pct), 2),
+                    "Unit": item.unit,
+                    "Unit cost (₹)": float(rate),
+                    "Actual material cost (₹)": float(line_cost),
+                    "Status": "Over-consumed" if difference > 0 else "Under-consumed" if difference < 0 else "On standard",
+                })
+
+            labour = Decimal(str(run.labour_cost or 0))
+            overhead = Decimal(str(run.overhead_cost or 0))
+            batch_cost = material_cost + labour + overhead
+            unit_cost = batch_cost / good if good > 0 else Decimal("0")
+
+            batch_rows.append({
+                "Batch": run.batch_number,
+                "Date": run.production_date.strftime("%Y-%m-%d") if run.production_date else "",
+                "Product": product_lookup.get(run.product_id, "Unknown"),
+                "Planned output": float(planned),
+                "Good output": float(good),
+                "Damaged units": float(damaged),
+                "Yield %": round(float(yield_pct), 2),
+                "Yield variance (pp)": round(float(yield_pct - Decimal("100")), 2),
+                "Material cost (₹)": float(material_cost),
+                "Labour (₹)": float(labour),
+                "Overhead (₹)": float(overhead),
+                "Total batch cost (₹)": float(batch_cost),
+                "Cost / good unit (₹)": float(unit_cost),
+            })
+
+            total_planned += planned
+            total_good += good
+            total_damaged += damaged
+            if good > 0:
+                total_cost += batch_cost
+                costed_output += good
+
+        overall_yield = total_good / total_planned * Decimal("100") if total_planned > 0 else Decimal("0")
+        average_cost = total_cost / costed_output if costed_output > 0 else Decimal("0")
+
+        st.subheader("Overall manufacturing performance")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Batches completed", f"{len(runs):,}")
+        c2.metric("Good units produced", f"{total_good:,.0f}")
+        c3.metric("Overall yield", f"{overall_yield:.2f}%")
+        c4.metric("Average cost / good unit", format_currency(average_cost))
+        c5, c6 = st.columns(2)
+        c5.metric("Planned output", f"{total_planned:,.0f}")
+        c6.metric("Damaged units", f"{total_damaged:,.0f}")
+
+        st.divider()
+        section_heading("Batch-wise production performance")
+        batch_df = pd.DataFrame(batch_rows)
+        st.dataframe(batch_df, use_container_width=True, hide_index=True)
+        st.bar_chart(batch_df[["Batch", "Planned output", "Good output"]].set_index("Batch"), use_container_width=True)
+
+        st.divider()
+        section_heading("Material consumption variance")
+        variance_df = pd.DataFrame(variance_rows)
+        if variance_df.empty:
+            st.info("No material consumption records are available for these production runs.")
+        else:
+            st.caption("Positive variance means actual consumption exceeded the BOM standard; negative variance means it was below standard.")
+            st.dataframe(variance_df, use_container_width=True, hide_index=True)
+            overused = variance_df[variance_df["Variance quantity"] > 0]
+            if not overused.empty:
+                st.warning(f"{len(overused)} material line(s) show consumption above the planned BOM quantity.")
+            else:
+                st.success("No material over-consumption detected in recorded production runs.")
+
+        st.divider()
+        section_heading("Export production analysis")
+        st.download_button(
+            "Download batch performance (CSV)",
+            data=batch_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="NammaFactory_Batch_Performance.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        st.download_button(
+            "Download material variance (CSV)",
+            data=variance_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="NammaFactory_Material_Variance.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        st.caption("Yield variance is shown in percentage points against the 100% planned-output baseline.")
+    except Exception as exc:
+        st.error(f"Unable to load production intelligence: {exc}")
+    finally:
+        db.close()
+
+
 def stock_ledger_page(db):
     """Read-only stock movement ledger with per-item running balances."""
 
@@ -2081,7 +2225,6 @@ ROLE_PAGES = {
         "Production",
         "Purchases",
         "Reports",
-        "Stock Ledger",
         "Audit Trail",
     ],
 
@@ -2114,6 +2257,7 @@ ROLE_PAGES = {
         "Business Analytics",
         "Production Intelligence",
         "Reports",
+        "Stock Ledger",
         "Audit Trail",
     ],
 }
@@ -2346,6 +2490,10 @@ def show_workspace_page(role, page, user):
 
             reporting_and_exports_page()
 
+        elif page == "Stock Ledger":
+
+            render_stock_ledger_page()
+
         elif page == "Audit Trail":
 
             render_audit_trail_page()
@@ -2380,43 +2528,7 @@ def show_workspace_page(role, page, user):
 
         elif page == "Production Intelligence":
 
-            section_heading("Production Intelligence")
-
-            db = SessionLocal()
-
-            try:
-
-                runs = db.scalars(
-                    select(ProductionRun)
-                ).all()
-
-                if runs:
-
-                    data = [
-                        {
-                            "Batch": r.batch_number,
-                            "Planned Output": float(r.planned_output),
-                            "Good Output": float(r.actual_good_output),
-                            "Damaged": float(r.damaged_quantity),
-                        }
-                        for r in runs
-                    ]
-
-                    st.dataframe(
-                        pd.DataFrame(data),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                else:
-
-                    show_empty_state(
-                        "Production intelligence will appear "
-                        "after production batches are recorded."
-                    )
-
-            finally:
-                db.close()
+            production_intelligence_page()
 
         elif page == "Reports":
 
