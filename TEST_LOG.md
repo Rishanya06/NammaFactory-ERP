@@ -1,27 +1,27 @@
 # NammaFactory — Test Log and Benchmark Validation
 
-## 1. Automated test execution
+## 1. Automated Test Execution
 
-Command:
+**Command:**
 
 ```powershell
 python -m pytest tests/ -v
 ```
 
-Developer-reported local result:
+**Verified local result:**
 
 ```text
-16 passed
+16 passed in 0.46s
 ```
 
-The suite tests pure business calculations in `utils/business_logic.py`.
+The automated test suite covers reusable business calculations implemented in `utils/business_logic.py`.
 
-## 2. Automated test coverage
+## 2. Automated Test Coverage
 
 | Area | Test coverage |
 |---|---|
-| Monetary arithmetic | Half-up decimal rounding |
-| State classification | Tamil Nadu and interstate classification |
+| Monetary arithmetic | Decimal calculations and half-up rounding |
+| State classification | Tamil Nadu intrastate and interstate classification |
 | Stock ledger | Opening, purchase, production issue, output and dispatch arithmetic |
 | Movement handling | Unknown movement type does not alter computed balance |
 | Weighted-average cost | Flour benchmark and opening oil rate |
@@ -29,73 +29,187 @@ The suite tests pure business calculations in `utils/business_logic.py`.
 | Financial totals | Invoice, GST, receipts and outstanding aggregation |
 | Empty data | Empty invoice/payment aggregate returns zero totals |
 
-## 3. Benchmark expected values
+## 3. Purchase and Production Benchmark
 
-| Benchmark item | Expected |
+### Purchase
+
+| Parameter | Recorded value |
 |---|---:|
-| Flour opening stock | 100 kg |
-| Flour purchase | 60 kg @ ₹45/kg |
-| Flour production issue | 40 kg |
-| Flour ending stock | 120 kg |
-| Weighted-average flour rate | ₹43.125/kg |
-| Oil opening stock | 30 L |
-| Oil actual consumption | 10.5 L |
-| Oil ending stock | 19.5 L |
-| Pouch opening stock | 500 pcs |
-| Pouches consumed | 194 pcs |
-| Pouch ending stock | 306 pcs |
-| Finished stock opening | 50 packets |
-| Good production output | 188 packets |
-| Finished stock after production | 238 packets |
-| Dispatch | 150 packets |
-| Finished stock after dispatch | 88 packets |
-| Planned production output | 200 packets |
+| Purchase reference | PUR-BENCH-001 |
+| Material | Rice flour |
+| Quantity purchased | 60 kg |
+| Purchase rate | ₹45/kg |
+| Purchase value | ₹2,700 |
+
+### Production
+
+| Parameter | Planned | Actual |
+|---|---:|---:|
+| Production output | 200 packets | 188 good packets |
+| Rice flour | 40 kg | 40 kg |
+| Cooking oil | 10 L | 10.5 L |
+| Spice mix | 1.2 kg | 1.2 kg |
+| Pouches | 200 | 194 |
+| Cartons | 10 | 9 |
+
+Additional production records:
+- Damaged quantity: 6 units.
+- Labour cost: ₹1,200.
+- Gas and power overhead: ₹600.
+
+## 4. Production Variance and Costing
+
+### Production performance
+
+| Metric | Verified result |
+|---|---:|
+| Planned output | 200 packets |
+| Actual good output | 188 packets |
 | Production yield | 94% |
-| Yield variance | −6 percentage points |
+| Yield variance | −6% |
+| Standard oil consumption | 10 L |
+| Actual oil consumption | 10.5 L |
 | Oil consumption variance | +5% |
-| Total material cost | ₹4,055 |
-| Labour | ₹1,200 |
-| Overhead | ₹600 |
-| Total batch cost | ₹5,855 |
-| Cost per good packet | approximately ₹31.14 |
 
-## 4. Sales A GST and payment reconciliation
+### Weighted-average flour valuation
 
-| Component | Expected |
+Opening flour inventory was 100 kg at ₹42/kg, followed by a purchase of 60 kg at ₹45/kg.
+
+\[
+\text{Weighted average cost}
+=
+\frac{(100\times42)+(60\times45)}{160}
+=₹43.125/\text{kg}
+\]
+
+### Production cost calculation
+
+| Cost component | Calculation | Amount |
+|---|---|---:|
+| Rice flour | 40 × ₹43.125 | ₹1,725 |
+| Cooking oil | 10.5 × ₹140 | ₹1,470 |
+| Spice mix | 1.2 × ₹200 | ₹240 |
+| Pouches | 194 × ₹2.50 | ₹485 |
+| Cartons | 9 × ₹15 | ₹135 |
+| **Total material cost** | | **₹4,055** |
+| Labour | | ₹1,200 |
+| Gas and power overhead | | ₹600 |
+| **Total production cost** | | **₹5,855** |
+
+\[
+\text{Cost per good packet}
+=
+\frac{5855}{188}
+\approx ₹31.14
+\]
+
+## 5. Inventory Reconciliation
+
+| Inventory item | Opening | Inward / Output | Consumption / Dispatch | Closing |
+|---|---:|---:|---:|---:|
+| Rice flour (kg) | 100 | +60 | −40 | 120 |
+| Cooking oil (L) | 30 | – | −10.5 | 19.5 |
+| Spice mix (kg) | 5 | – | −1.2 | 3.8 |
+| Pouches | 500 | – | −194 | 306 |
+| Cartons | 30 | – | −9 | 21 |
+| Murukku packets | 50 | +188 | −150 | 88 |
+
+Finished-goods reconciliation:
+
+- Opening finished stock: 50 packets.
+- Good production output: 188 packets.
+- Stock after production: 238 packets.
+- Customer A dispatch: 150 packets.
+- Remaining finished stock: 88 packets.
+
+## 6. Sales and GST Reconciliation
+
+### Customer A — Tamil Nadu
+
+| Component | Verified result |
 |---|---:|
-| Taxable amount | ₹7,500.00 |
+| Quantity ordered | 150 packets |
+| Taxable amount | ₹7,500 |
 | CGST | ₹187.50 |
 | SGST | ₹187.50 |
-| IGST | ₹0.00 |
-| Invoice total | ₹7,875.00 |
-| Payment recorded | ₹4,000.00 |
-| Outstanding | ₹3,875.00 |
+| IGST | ₹0 |
+| Invoice total | ₹7,875 |
+| Payment received | ₹4,000 |
+| Outstanding | ₹3,875 |
 
-## 5. Manual workflow checks reported during development
+The invoice was generated and the dispatch of 150 packets was completed.
 
-The developer manually verified the following application workflows during iterative development:
+### Customer B — Karnataka
+
+| Component | Verified result |
+|---|---:|
+| Quantity ordered | 120 packets |
+| Taxable amount | ₹6,000 |
+| IGST | ₹300 |
+| Invoice total | ₹6,300 |
+| Available finished stock | 88 packets |
+| Dispatch shortage | 32 packets |
+| Dispatch status | Blocked |
+| Payment received | ₹0 |
+| Outstanding | ₹6,300 |
+
+The application generated the interstate invoice with IGST and prevented dispatch because available stock was insufficient.
+
+### Combined financial reconciliation
+
+| Metric | Verified result |
+|---|---:|
+| Number of invoices | 2 |
+| Total taxable value | ₹13,500 |
+| Total GST | ₹675 |
+| Total invoice value | ₹14,175 |
+| Payments received | ₹4,000 |
+| Total outstanding | ₹10,175 |
+
+## 7. Manual Application Validation
+
+The following application workflows were manually exercised during development and benchmark execution:
+
 - Role-based login and navigation.
-- Sales order creation and admin approval.
+- Sales order creation and administrator approval.
 - GST invoice generation and PDF download.
-- Dispatch stock validation (attempt to dispatch 89 against 50 available was blocked).
-- Production posting and variance display.
+- Purchase receipt and raw-material stock update.
+- Production run posting and actual consumption capture.
+- Production yield and material variance display.
 - Production costing display.
-- Purchase receipt flow.
-- Partial customer payment and receivables.
-- CSV/Excel report downloads.
-- Owner dashboard.
-- Audit trail filters and CSV export.
-- Stock ledger and running balances.
+- Customer payment recording and outstanding reconciliation.
+- Dispatch stock validation.
+- CSV and Excel report downloads.
+- Owner dashboard and business analytics.
 - Production intelligence.
-- Business analytics.
 - GST and financial reconciliation.
-- System health diagnostics.
+- Stock ledger and running balances.
+- Audit trail filters and CSV export.
+- System-health diagnostics.
 
-These are development-session manual checks, not a substitute for a repeatable automated end-to-end integration test run.
+### System health verification
 
-## 6. Test environment and reproducibility
+| Diagnostic result | Verified count |
+|---|---:|
+| Total checks | 7 |
+| Passed | 7 |
+| Warnings | 0 |
+| Errors | 0 |
 
-The project was developed on Windows 11 using Python 3.13 and VS Code. To reproduce:
+The audit trail displayed 22 events during the completed benchmark validation.
+
+These manual checks are application-level verification, not a substitute for automated end-to-end integration tests.
+
+## 8. Test Environment and Reproducibility
+
+**Development environment:**
+- Operating system: Windows 11.
+- Python: 3.13.
+- IDE: Visual Studio Code.
+- Database: SQLite.
+- Application: Streamlit.
+
+To reproduce the local test environment:
 
 ```powershell
 python -m venv .venv
@@ -105,12 +219,20 @@ python -m pytest tests/ -v
 streamlit run app.py
 ```
 
-For a fresh demo database, initialize demo records with `python seed.py`. Do not rerun the seed script against a database whose transaction history must be retained.
+For a fresh demo database:
 
-## 7. Notes and limitations
+```powershell
+python seed.py
+```
 
-- Benchmark values assume the specified opening balances and transactions only.
-- Aggregate dashboards can show larger values if additional test transactions exist.
-- Historical test batches created before consumption tracking may show incomplete production variance detail.
-- GST summary is an operational report, not a statutory return.
-- The weighted-average cost is a periodic approximation using opening rates and received purchase records.
+Do not rerun the seed script against a database whose transaction history must be preserved.
+
+## 9. Notes and Limitations
+
+- Benchmark figures assume the specified opening balances and transactions.
+- Additional transactions can change aggregate dashboard and report values.
+- The benchmark costing uses weighted-average material valuation based on opening rates and purchase records.
+- Historical development transactions created before consumption tracking may show incomplete production variance details.
+- GST calculations are an operational demonstration, not a statutory GST filing engine.
+- The automated test suite focuses on reusable business calculations; full automated UI and database integration testing remains future work.
+- The application is a prototype and requires additional engineering for production deployment, multi-user concurrency, database migrations and operational security.
