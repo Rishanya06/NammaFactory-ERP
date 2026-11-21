@@ -1667,6 +1667,237 @@ def reporting_and_exports_page():
 
 
 
+
+def gst_reconciliation_page():
+    """Period-based GST summary and invoice-to-payment reconciliation."""
+    db = SessionLocal()
+    try:
+        section_heading(
+            "🧮 GST & Financial Reconciliation",
+            "Reconcile posted invoices against receipts and review GST components for a selected period.",
+        )
+
+        invoices = db.scalars(
+            select(Invoice).order_by(Invoice.invoice_date.desc(), Invoice.id.desc())
+        ).all()
+        payments = db.scalars(
+            select(Payment).order_by(Payment.payment_date.desc(), Payment.id.desc())
+        ).all()
+
+        if not invoices:
+            st.info("GST and reconciliation reports will appear after GST invoices are generated.")
+            return
+
+        invoice_dates = [
+            inv.invoice_date.date()
+            for inv in invoices
+            if inv.invoice_date is not None
+        ]
+        if invoice_dates:
+            min_date = min(invoice_dates)
+            max_date = max(invoice_dates)
+            selected_range = st.date_input(
+                "GST reporting period",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+            )
+        else:
+            selected_range = ()
+
+        if isinstance(selected_range, (tuple, list)) and len(selected_range) == 2:
+            start_date, end_date = selected_range
+            period_invoices = [
+                inv for inv in invoices
+                if inv.invoice_date is not None
+                and start_date <= inv.invoice_date.date() <= end_date
+            ]
+        else:
+            period_invoices = invoices
+
+        period_invoice_ids = {inv.id for inv in period_invoices}
+        period_payments = [
+            pay for pay in payments
+            if pay.invoice_id in period_invoice_ids
+        ]
+
+        # GST values are calculated from the invoice date, while receipts are
+        # allocated to the invoice for reconciliation, regardless of receipt date.
+        gst_totals = {
+            "Taxable value": Decimal("0"),
+            "CGST": Decimal("0"),
+            "SGST": Decimal("0"),
+            "IGST": Decimal("0"),
+            "Invoice value": Decimal("0"),
+        }
+        payment_by_invoice = {}
+        for payment in payments:
+            amount = Decimal(str(payment.amount or 0))
+            payment_by_invoice[payment.invoice_id] = (
+                payment_by_invoice.get(payment.invoice_id, Decimal("0")) + amount
+            )
+
+        reconciliation_rows = []
+        ageing_buckets = {
+            "Current (0–30 days)": Decimal("0"),
+            "31–60 days": Decimal("0"),
+            "61–90 days": Decimal("0"),
+            "Over 90 days": Decimal("0"),
+        }
+        overpaid_rows = []
+        today = datetime.now().date()
+        total_receipts_for_period_invoices = Decimal("0")
+        total_outstanding = Decimal("0")
+
+        for invoice in period_invoices:
+            taxable = Decimal(str(invoice.taxable_amount or 0))
+            cgst = Decimal(str(invoice.cgst or 0))
+            sgst = Decimal(str(invoice.sgst or 0))
+            igst = Decimal(str(invoice.igst or 0))
+            invoice_value = Decimal(str(invoice.total_amount or 0))
+            paid = payment_by_invoice.get(invoice.id, Decimal("0"))
+            balance = invoice_value - paid
+
+            gst_totals["Taxable value"] += taxable
+            gst_totals["CGST"] += cgst
+            gst_totals["SGST"] += sgst
+            gst_totals["IGST"] += igst
+            gst_totals["Invoice value"] += invoice_value
+            total_receipts_for_period_invoices += paid
+
+            if balance > 0:
+                total_outstanding += balance
+                invoice_day = invoice.invoice_date.date() if invoice.invoice_date else today
+                age = max(0, (today - invoice_day).days)
+                if age <= 30:
+                    bucket = "Current (0–30 days)"
+                elif age <= 60:
+                    bucket = "31–60 days"
+                elif age <= 90:
+                    bucket = "61–90 days"
+                else:
+                    bucket = "Over 90 days"
+                ageing_buckets[bucket] += balance
+                reconciliation_status = "Partially paid" if paid > 0 else "Unpaid"
+            elif balance == 0:
+                reconciliation_status = "Fully paid"
+            else:
+                reconciliation_status = "Overpaid"
+                overpaid_rows.append({
+                    "Invoice": invoice.invoice_number,
+                    "Invoice value (₹)": float(invoice_value),
+                    "Receipts allocated (₹)": float(paid),
+                    "Excess receipt (₹)": float(-balance),
+                })
+
+            order = db.get(SalesOrder, invoice.order_id)
+            customer = db.get(Customer, order.customer_id) if order else None
+            reconciliation_rows.append({
+                "Invoice": invoice.invoice_number,
+                "Invoice date": invoice.invoice_date.strftime("%Y-%m-%d") if invoice.invoice_date else "",
+                "Customer": customer.name if customer else "Unknown",
+                "State": customer.state if customer else "",
+                "Taxable (₹)": float(taxable),
+                "CGST (₹)": float(cgst),
+                "SGST (₹)": float(sgst),
+                "IGST (₹)": float(igst),
+                "Invoice total (₹)": float(invoice_value),
+                "Receipts allocated (₹)": float(paid),
+                "Balance (₹)": float(balance),
+                "Reconciliation": reconciliation_status,
+                "Invoice status": invoice.status,
+            })
+
+        total_gst = gst_totals["CGST"] + gst_totals["SGST"] + gst_totals["IGST"]
+        st.subheader("GST summary for selected period")
+        g1, g2, g3, g4 = st.columns(4)
+        g1.metric("Taxable value", format_currency(gst_totals["Taxable value"]))
+        g2.metric("CGST", format_currency(gst_totals["CGST"]))
+        g3.metric("SGST", format_currency(gst_totals["SGST"]))
+        g4.metric("IGST", format_currency(gst_totals["IGST"]))
+
+        g5, g6 = st.columns(2)
+        g5.metric("Total GST", format_currency(total_gst))
+        g6.metric("Invoice value", format_currency(gst_totals["Invoice value"]))
+
+        st.caption(
+            "GST is grouped by invoice date. This is an operational summary of recorded invoices, "
+            "not a statutory GST return or tax filing."
+        )
+
+        st.divider()
+        section_heading("Invoice-to-payment reconciliation")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Invoices in period", f"{len(period_invoices):,}")
+        r2.metric("Receipts allocated", format_currency(total_receipts_for_period_invoices))
+        r3.metric("Outstanding", format_currency(total_outstanding))
+        r4.metric("Overpaid invoices", f"{len(overpaid_rows):,}")
+
+        reconciliation_df = pd.DataFrame(reconciliation_rows)
+        st.dataframe(
+            reconciliation_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.download_button(
+            "Download invoice reconciliation (CSV)",
+            data=reconciliation_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="NammaFactory_Invoice_Reconciliation.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        if overpaid_rows:
+            st.warning(
+                "One or more invoices have receipts exceeding their invoice value. "
+                "Review these allocations; excess receipts are not treated as negative receivables."
+            )
+            st.dataframe(pd.DataFrame(overpaid_rows), use_container_width=True, hide_index=True)
+
+        st.divider()
+        section_heading("Receivables ageing for selected invoices")
+        ageing_df = pd.DataFrame([
+            {"Ageing bucket": label, "Outstanding (₹)": float(value)}
+            for label, value in ageing_buckets.items()
+        ])
+        st.bar_chart(ageing_df.set_index("Ageing bucket"), use_container_width=True)
+        st.dataframe(ageing_df, use_container_width=True, hide_index=True)
+
+        st.divider()
+        section_heading("Receipt register for selected invoice period")
+        receipt_rows = []
+        for payment in period_payments:
+            invoice = db.get(Invoice, payment.invoice_id)
+            order = db.get(SalesOrder, invoice.order_id) if invoice else None
+            customer = db.get(Customer, order.customer_id) if order else None
+            receipt_rows.append({
+                "Receipt date": payment.payment_date.strftime("%Y-%m-%d") if payment.payment_date else "",
+                "Invoice": invoice.invoice_number if invoice else "Unknown",
+                "Customer": customer.name if customer else "Unknown",
+                "Amount (₹)": float(payment.amount or 0),
+                "Method": payment.payment_method,
+                "Reference": payment.reference_number or "",
+            })
+
+        receipt_df = pd.DataFrame(receipt_rows)
+        if receipt_df.empty:
+            st.info("No receipts are linked to invoices in the selected period.")
+        else:
+            st.dataframe(receipt_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download receipt register (CSV)",
+                data=receipt_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="NammaFactory_Receipt_Register.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    except Exception as exc:
+        st.error(f"Unable to load GST and reconciliation reports: {exc}")
+    finally:
+        db.close()
+
+
 def business_analytics_page():
     """Owner-facing commercial analytics for revenue, GST, collections and purchases."""
     db = SessionLocal()
@@ -2475,6 +2706,7 @@ ROLE_PAGES = {
         "Invoices",
         "Payments",
         "Financial Reports",
+        "GST & Reconciliation",
         "Stock Ledger",
         "Audit Trail",
     ],
@@ -2483,6 +2715,7 @@ ROLE_PAGES = {
         "Owner Dashboard",
         "Business Analytics",
         "Production Intelligence",
+        "GST & Reconciliation",
         "Reports",
         "Stock Ledger",
         "Audit Trail",
@@ -2699,6 +2932,10 @@ def show_workspace_page(role, page, user):
 
             reporting_and_exports_page()
 
+        elif page == "GST & Reconciliation":
+
+            gst_reconciliation_page()
+
         elif page == "Stock Ledger":
 
             render_stock_ledger_page()
@@ -2732,6 +2969,10 @@ def show_workspace_page(role, page, user):
         elif page == "Production Intelligence":
 
             production_intelligence_page()
+
+        elif page == "GST & Reconciliation":
+
+            gst_reconciliation_page()
 
         elif page == "Reports":
 
