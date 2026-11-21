@@ -1664,6 +1664,170 @@ def reporting_and_exports_page():
         db.close()
 
 
+def audit_trail_page(db):
+    """Read-only, filterable audit history for authorized management roles."""
+
+    section_heading(
+        "🧾 Audit Trail",
+        "A chronological, read-only record of important actions performed in NammaFactory.",
+    )
+
+    try:
+        events = db.scalars(
+            select(AuditLog).order_by(AuditLog.timestamp.desc(), AuditLog.id.desc())
+        ).all()
+
+        users = db.scalars(select(User)).all()
+        user_lookup = {
+            user.id: f"{user.full_name} ({user.username})"
+            for user in users
+        }
+
+        if not events:
+            st.info("No audit events have been recorded yet.")
+            return
+
+        # Convert database events into a consistent display structure.
+        rows = []
+        for event in events:
+            event_time = event.timestamp
+            rows.append({
+                "Event ID": event.id,
+                "Date & Time": (
+                    event_time.strftime("%d %b %Y, %I:%M:%S %p")
+                    if event_time else "—"
+                ),
+                "_timestamp": event_time,
+                "User": user_lookup.get(event.user_id, f"User #{event.user_id}"),
+                "_user_id": event.user_id,
+                "Action": str(event.action or "—"),
+                "Record Type": str(event.entity_type or "—"),
+                "Record ID": str(event.entity_id) if event.entity_id is not None else "—",
+                "Details": str(event.details or ""),
+            })
+
+        audit_df = pd.DataFrame(rows)
+
+        # Summary metrics use the complete event set, not the filtered view.
+        total_events = len(audit_df)
+        distinct_users = audit_df["_user_id"].nunique()
+        distinct_actions = audit_df["Action"].nunique()
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total audit events", f"{total_events:,}")
+        m2.metric("Users represented", f"{distinct_users:,}")
+        m3.metric("Action types", f"{distinct_actions:,}")
+
+        st.divider()
+        section_heading("Filter audit records")
+
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            user_options = ["All users"] + sorted(audit_df["User"].dropna().unique().tolist())
+            selected_user = st.selectbox("Performed by", user_options)
+        with f2:
+            action_options = ["All actions"] + sorted(audit_df["Action"].dropna().unique().tolist())
+            selected_action = st.selectbox("Action", action_options)
+        with f3:
+            type_options = ["All record types"] + sorted(audit_df["Record Type"].dropna().unique().tolist())
+            selected_type = st.selectbox("Record type", type_options)
+
+        search_text = st.text_input(
+            "Search details, record ID or user",
+            placeholder="e.g. invoice number, order number, payment...",
+        )
+
+        date_values = [value.date() for value in audit_df["_timestamp"] if value is not None]
+        if date_values:
+            min_date = min(date_values)
+            max_date = max(date_values)
+            date_range = st.date_input(
+                "Date range",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+            )
+        else:
+            date_range = ()
+
+        filtered = audit_df.copy()
+
+        if selected_user != "All users":
+            filtered = filtered[filtered["User"] == selected_user]
+        if selected_action != "All actions":
+            filtered = filtered[filtered["Action"] == selected_action]
+        if selected_type != "All record types":
+            filtered = filtered[filtered["Record Type"] == selected_type]
+
+        if search_text.strip():
+            needle = search_text.strip().lower()
+            searchable = (
+                filtered["User"].fillna("").str.lower()
+                + " " + filtered["Action"].fillna("").str.lower()
+                + " " + filtered["Record Type"].fillna("").str.lower()
+                + " " + filtered["Record ID"].fillna("").str.lower()
+                + " " + filtered["Details"].fillna("").str.lower()
+            )
+            filtered = filtered[searchable.str.contains(needle, regex=False)]
+
+        if isinstance(date_range, (tuple, list)) and len(date_range) == 2:
+            start_date, end_date = date_range
+            filtered = filtered[
+                filtered["_timestamp"].apply(
+                    lambda value: value is not None
+                    and start_date <= value.date() <= end_date
+                )
+            ]
+
+        st.caption(f"Showing {len(filtered):,} of {total_events:,} audit events.")
+
+        display_columns = [
+            "Event ID", "Date & Time", "User", "Action",
+            "Record Type", "Record ID", "Details",
+        ]
+        display_df = filtered[display_columns]
+
+        if display_df.empty:
+            st.info("No audit events match the selected filters.")
+        else:
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Event ID": st.column_config.NumberColumn("Event ID", format="%d"),
+                    "Details": st.column_config.TextColumn("Details", width="large"),
+                },
+            )
+
+        export_df = display_df.copy()
+        csv_data = export_df.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "Download filtered audit trail (CSV)",
+            data=csv_data,
+            file_name="NammaFactory_Audit_Trail.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+        st.caption(
+            "Audit records are displayed read-only. This page does not provide edit or delete controls."
+        )
+
+    except Exception as exc:
+        st.error(f"Unable to load the audit trail: {exc}")
+
+
+
+def render_audit_trail_page():
+    """Open and reliably close the database session for the audit page."""
+    db = SessionLocal()
+    try:
+        audit_trail_page(db)
+    finally:
+        db.close()
+
+
 # ============================================================
 # 10. ROLE-SPECIFIC NAVIGATION
 # ============================================================
@@ -1700,6 +1864,7 @@ ROLE_PAGES = {
         "Invoices",
         "Payments",
         "Financial Reports",
+        "Audit Trail",
     ],
 
     "owner": [
@@ -1707,6 +1872,7 @@ ROLE_PAGES = {
         "Business Analytics",
         "Production Intelligence",
         "Reports",
+        "Audit Trail",
     ],
 }
 
@@ -1754,10 +1920,7 @@ def show_workspace_page(role, page, user):
 
         elif page == "Audit Trail":
 
-            section_heading("Audit Trail")
-            st.write("Review factory transactions and activity.")
-
-            st.info("Audit event reporting will be connected in a later milestone.")
+            render_audit_trail_page()
 
     # --------------------------------------------------------
     # SALESMAN WORKSPACE
@@ -1911,6 +2074,10 @@ def show_workspace_page(role, page, user):
 
             reporting_and_exports_page()
 
+        elif page == "Audit Trail":
+
+            render_audit_trail_page()
+
     # --------------------------------------------------------
     # OWNER WORKSPACE
     # --------------------------------------------------------
@@ -1920,6 +2087,10 @@ def show_workspace_page(role, page, user):
         if page == "Reports":
 
             reporting_and_exports_page()
+
+        elif page == "Audit Trail":
+
+            render_audit_trail_page()
 
         elif page == "Business Analytics":
 
