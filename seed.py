@@ -19,10 +19,6 @@ from models import (
 )
 
 
-# --------------------------------------------------
-# PASSWORD HASHING
-# --------------------------------------------------
-
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
     iterations = 310000
@@ -37,17 +33,12 @@ def hash_password(password: str) -> str:
     return f"pbkdf2_sha256${iterations}${salt}${password_hash}"
 
 
-# --------------------------------------------------
-# INITIALISE DATABASE
-# --------------------------------------------------
-
 def seed_database():
     initialize_database()
-
     db = SessionLocal()
 
     try:
-        # 1. CREATE DEMO USERS
+        # 1. USERS
         user_data = [
             ("admin", "Admin@123", "Factory Administrator", "admin"),
             ("salesman", "Sales@123", "Sales Executive A", "salesman"),
@@ -60,16 +51,13 @@ def seed_database():
             user = db.scalar(
                 select(User).where(User.username == username)
             )
-
             if user is None:
-                db.add(
-                    User(
-                        username=username,
-                        password_hash=hash_password(password),
-                        full_name=full_name,
-                        role=role,
-                    )
-                )
+                db.add(User(
+                    username=username,
+                    password_hash=hash_password(password),
+                    full_name=full_name,
+                    role=role,
+                ))
 
         db.flush()
 
@@ -77,30 +65,45 @@ def seed_database():
             select(User).where(User.username == "admin")
         )
 
-        # 2. CREATE FINISHED PRODUCT
-        product = db.scalar(
-            select(Product).where(Product.sku == "SNK-MUR-200")
-        )
+        # 2. FINISHED PRODUCTS
+        product_data = [
+            ("Murukku 200g", "SNK-MUR-200", "210690", "50.00"),
+            ("Mixture 200g", "SNK-MIX-200", "210690", "60.00"),
+            ("Ribbon Pakoda 200g", "SNK-RIB-200", "210690", "60.00"),
+            ("Banana Chips 200g", "SNK-BAN-200", "210690", "80.00"),
+            ("Thatta 200g", "SNK-THA-200", "210690", "50.00"),
+        ]
 
-        if product is None:
-            product = Product(
-                name="Murukku 200g",
-                sku="SNK-MUR-200",
-                hsn_code="210690",
-                selling_price=Decimal("50.00"),
-                gst_rate=Decimal("5.00"),
-                unit="packet",
+        products = {}
+
+        for name, sku, hsn, price in product_data:
+            product = db.scalar(
+                select(Product).where(Product.sku == sku)
             )
-            db.add(product)
-            db.flush()
 
-        # 3. CREATE RAW MATERIALS AND PACKAGING
+            if product is None:
+                product = Product(
+                    name=name,
+                    sku=sku,
+                    hsn_code=hsn,
+                    selling_price=Decimal(price),
+                    gst_rate=Decimal("5.00"),
+                    unit="packet",
+                )
+                db.add(product)
+                db.flush()
+
+            products[sku] = product
+
+        # 3. RAW MATERIALS AND PACKAGING
         material_data = [
             ("Rice Flour", "RM-FLOUR", "kg", "20"),
             ("Cooking Oil", "RM-OIL", "litre", "10"),
             ("Salt and Spice Mix", "RM-SPICE", "kg", "2"),
             ("200g Pouch", "PKG-POUCH", "piece", "100"),
             ("Carton (20 packets)", "PKG-CARTON", "piece", "5"),
+            ("Gram Flour", "RM-GRAM", "kg", "10"),
+            ("Raw Banana", "RM-BANANA", "kg", "15"),
         ]
 
         materials = {}
@@ -122,10 +125,16 @@ def seed_database():
 
             materials[sku] = material
 
-        # 4. CREATE CUSTOMERS
+        # 4. CUSTOMERS
         customer_data = [
             ("Retailer A", "9876543210", "Tamil Nadu"),
             ("Distributor B", "9876543211", "Karnataka"),
+            ("Chennai Super Stores", "9876543212", "Tamil Nadu"),
+            ("Coimbatore Food Mart", "9876543213", "Tamil Nadu"),
+            ("Madurai Wholesale Foods", "9876543214", "Tamil Nadu"),
+            ("Kochi Snack Distributors", "9876543215", "Kerala"),
+            ("Bengaluru Retail Hub", "9876543216", "Karnataka"),
+            ("Vijayawada Foods", "9876543217", "Andhra Pradesh"),
         ]
 
         for name, phone, state in customer_data:
@@ -134,71 +143,130 @@ def seed_database():
             )
 
             if customer is None:
-                db.add(
-                    Customer(
-                        name=name,
-                        phone=phone,
-                        state=state,
-                        address="Demo address",
-                    )
-                )
+                db.add(Customer(
+                    name=name,
+                    phone=phone,
+                    state=state,
+                    address="Demo business address",
+                ))
 
-        # 5. CREATE SUPPLIER
-        supplier = db.scalar(
-            select(Supplier).where(
-                Supplier.name == "Tamil Nadu Ingredients Supplier"
-            )
-        )
+        # 5. SUPPLIERS
+        supplier_data = [
+            ("Tamil Nadu Ingredients Supplier", "9876500000", "Tamil Nadu"),
+            ("South India Pulses Supplier", "9876500001", "Tamil Nadu"),
+            ("Fresh Banana Supplier", "9876500002", "Kerala"),
+        ]
 
-        if supplier is None:
-            db.add(
-                Supplier(
-                    name="Tamil Nadu Ingredients Supplier",
-                    phone="9876500000",
-                    state="Tamil Nadu",
-                )
+        for name, phone, state in supplier_data:
+            supplier = db.scalar(
+                select(Supplier).where(Supplier.name == name)
             )
+
+            if supplier is None:
+                db.add(Supplier(
+                    name=name,
+                    phone=phone,
+                    state=state,
+                ))
 
         db.flush()
 
-        # 6. CREATE BILL OF MATERIALS
-        bom = db.scalar(
-            select(BOM).where(
-                BOM.product_id == product.id,
-                BOM.is_active == True,
+        # 6. BILL OF MATERIALS
+        # Quantities are illustrative demo recipes.
+        # Murukku retains the exact assignment benchmark BOM.
+
+        bom_data = [
+            (
+                "SNK-MUR-200",
+                "200",
+                [
+                    ("RM-FLOUR", "40", "kg"),
+                    ("RM-OIL", "10", "litre"),
+                    ("RM-SPICE", "1.2", "kg"),
+                    ("PKG-POUCH", "200", "piece"),
+                    ("PKG-CARTON", "10", "piece"),
+                ],
+            ),
+            (
+                "SNK-MIX-200",
+                "100",
+                [
+                    ("RM-FLOUR", "10", "kg"),
+                    ("RM-GRAM", "8", "kg"),
+                    ("RM-OIL", "5", "litre"),
+                    ("RM-SPICE", "1", "kg"),
+                    ("PKG-POUCH", "100", "piece"),
+                    ("PKG-CARTON", "5", "piece"),
+                ],
+            ),
+            (
+                "SNK-RIB-200",
+                "100",
+                [
+                    ("RM-FLOUR", "12", "kg"),
+                    ("RM-GRAM", "6", "kg"),
+                    ("RM-OIL", "5", "litre"),
+                    ("RM-SPICE", "0.8", "kg"),
+                    ("PKG-POUCH", "100", "piece"),
+                    ("PKG-CARTON", "5", "piece"),
+                ],
+            ),
+            (
+                "SNK-BAN-200",
+                "100",
+                [
+                    ("RM-BANANA", "25", "kg"),
+                    ("RM-OIL", "8", "litre"),
+                    ("RM-SPICE", "0.5", "kg"),
+                    ("PKG-POUCH", "100", "piece"),
+                    ("PKG-CARTON", "5", "piece"),
+                ],
+            ),
+            (
+                "SNK-THA-200",
+                "100",
+                [
+                    ("RM-FLOUR", "15", "kg"),
+                    ("RM-GRAM", "3", "kg"),
+                    ("RM-OIL", "4", "litre"),
+                    ("RM-SPICE", "0.6", "kg"),
+                    ("PKG-POUCH", "100", "piece"),
+                    ("PKG-CARTON", "5", "piece"),
+                ],
+            ),
+        ]
+
+        for product_sku, batch_quantity, items in bom_data:
+            product = products[product_sku]
+
+            bom = db.scalar(
+                select(BOM).where(
+                    BOM.product_id == product.id,
+                    BOM.is_active == True,
+                )
             )
-        )
 
-        if bom is None:
-            bom = BOM(
-                product_id=product.id,
-                batch_output_quantity=Decimal("200"),
-                version=1,
-            )
-            db.add(bom)
-            db.flush()
+            if bom is None:
+                bom = BOM(
+                    product_id=product.id,
+                    batch_output_quantity=Decimal(batch_quantity),
+                    version=1,
+                )
+                db.add(bom)
+                db.flush()
 
-            bom_items = [
-                ("RM-FLOUR", "40", "kg"),
-                ("RM-OIL", "10", "litre"),
-                ("RM-SPICE", "1.2", "kg"),
-                ("PKG-POUCH", "200", "piece"),
-                ("PKG-CARTON", "10", "piece"),
-            ]
-
-            for sku, quantity, unit in bom_items:
-                db.add(
-                    BOMItem(
+                for material_sku, quantity, unit in items:
+                    db.add(BOMItem(
                         bom_id=bom.id,
-                        raw_material_id=materials[sku].id,
+                        raw_material_id=materials[material_sku].id,
                         standard_quantity=Decimal(quantity),
                         unit=unit,
-                    )
-                )
+                    ))
 
         db.flush()
 
-        # 7. CREATE OPENING STOCK MOVEMENTS ONLY ONCE
+        # 7. OPENING STOCK
+        # Only the original Murukku benchmark receives opening stock.
         opening_count = db.scalar(
             select(func.count(StockMovement.id)).where(
                 StockMovement.reference_type == "OPENING_BALANCE"
@@ -212,34 +280,34 @@ def seed_database():
                 ("RAW_MATERIAL", materials["RM-SPICE"].id, "5", "kg"),
                 ("RAW_MATERIAL", materials["PKG-POUCH"].id, "500", "piece"),
                 ("RAW_MATERIAL", materials["PKG-CARTON"].id, "30", "piece"),
-                ("PRODUCT", product.id, "50", "packet"),
+                ("PRODUCT", products["SNK-MUR-200"].id, "50", "packet"),
             ]
 
             for item_type, item_id, quantity, unit in opening_stock:
-                db.add(
-                    StockMovement(
-                        item_type=item_type,
-                        item_id=item_id,
-                        movement_type="OPENING",
-                        quantity=Decimal(quantity),
-                        unit=unit,
-                        reference_type="OPENING_BALANCE",
-                        reference_id=0,
-                        notes="Initial benchmark opening stock",
-                        created_by=admin.id,
-                        created_at=datetime.utcnow(),
-                    )
-                )
+                db.add(StockMovement(
+                    item_type=item_type,
+                    item_id=item_id,
+                    movement_type="OPENING",
+                    quantity=Decimal(quantity),
+                    unit=unit,
+                    reference_type="OPENING_BALANCE",
+                    reference_id=0,
+                    notes="Initial Murukku benchmark opening stock",
+                    created_by=admin.id,
+                    created_at=datetime.utcnow(),
+                ))
 
         db.commit()
 
-        print("NAMMAFACTORY SEED DATA CREATED SUCCESSFULLY!")
-        print("Demo users: 5")
-        print("Finished products: 1")
-        print("Raw materials and packaging: 5")
-        print("Customers: 2")
-        print("BOM: Murukku 200g")
+        print("\nNAMMAFACTORY DEMO DATABASE SEEDED SUCCESSFULLY!")
+        print("Users: 5")
+        print("Finished products: 5")
+        print("Customers: 8")
+        print("Suppliers: 3")
+        print("Raw materials and packaging: 7")
+        print("Bills of Material: 5")
         print("Opening stock movements: 6")
+        print("Additional products have no opening stock.")
 
     except Exception:
         db.rollback()
