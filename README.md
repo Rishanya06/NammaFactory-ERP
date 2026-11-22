@@ -313,3 +313,13 @@ Potential areas for further development include:
 **GitHub:** https://github.com/Rishanya06/NammaFactory-ERP
 
 NammaFactory aims to provide small food manufacturers with a connected, traceable and data-driven approach to managing their business operations—from customer orders and manufacturing to inventory, accounts and management decisions.
+
+---
+
+## Project Demonstration
+
+A complete walkthrough of NammaFactory, demonstrating its role-based workspaces and integrated ERP workflows.
+
+**Demo Video (7 minutes 57 seconds):**
+
+[Watch NammaFactory Demo](https://drive.google.com/file/d/1vPLXEMGBv3cmbznbGHl2U96j0ioWOwVT/view?usp=drive_link)
