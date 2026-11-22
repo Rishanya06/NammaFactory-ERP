@@ -1,22 +1,27 @@
-# NammaFactory – System Design Note
+# NammaFactory — System Design Note
 
-## 1. System Architecture and Data Model
+## 1. System Architecture
 
-NammaFactory is a role-based ERP application for small food manufacturing businesses. It is built using **Python, Streamlit, SQLAlchemy and SQLite**, with Pandas and OpenPyXL for reporting and ReportLab for invoice PDF generation.
+NammaFactory is a role-based ERP application designed to integrate the operational workflows of small and medium-sized food manufacturing businesses. It is developed using Python, Streamlit, SQLAlchemy and SQLite.
 
-The application follows a modular architecture:
-- **Presentation layer:** Streamlit role-specific interfaces for administrators, salesmen, production staff, accountants and owners.
-- **Business logic layer:** Handles purchases, BOM-based production, inventory movements, order approval, invoicing, dispatch, payments and costing.
-- **Data layer:** SQLAlchemy ORM models backed by an SQLite relational database.
+The application follows a modular, layered architecture:
 
-### Core data model
+- **Presentation layer:** Streamlit interfaces for Administrator, Salesman, Production Supervisor, Accountant and Factory Owner.
+- **Business logic layer:** Handles order processing, purchase transactions, BOM-based production, inventory movements, GST calculations, dispatch validation, payments and costing.
+- **Data access layer:** SQLAlchemy ORM manages database operations and entity relationships.
+- **Database layer:** SQLite provides relational persistence for business transactions.
+- **Reporting layer:** Pandas, Plotly, ReportLab and OpenPyXL support analytics, PDF invoices and spreadsheet exports.
 
-The database contains 17 tables:
+This structure separates user interactions, business operations and persistent data, making the application easier to maintain and extend.
 
-| Functional area | Main entities |
+## 2. Database Design
+
+The relational database contains **17 models** organised around the major ERP functions.
+
+| Functional area | Models |
 |---|---|
 | Access and auditing | User, AuditLog |
-| Masters | Product, Customer, Supplier, RawMaterial |
+| Master data | Product, Customer, Supplier, RawMaterial |
 | Manufacturing | BOM, BOMItem, ProductionRun, ProductionConsumption |
 | Procurement | Purchase, PurchaseItem |
 | Sales and finance | SalesOrder, SalesOrderItem, Invoice, Payment |
@@ -24,137 +29,123 @@ The database contains 17 tables:
 
 ### Key relationships
 
-- A Product can have multiple BOM versions.
-- A BOM contains multiple BOMItems, each linked to a RawMaterial.
-- A ProductionRun references a Product and BOM and records actual material consumption.
-- A Purchase contains multiple PurchaseItems and increases raw-material stock.
-- A Customer can place multiple SalesOrders.
-- A SalesOrder contains SalesOrderItems and can generate an Invoice.
-- An Invoice can have multiple Payment records.
-- StockMovement records inventory changes, while AuditLog records important user actions.
+- Products are associated with their Bills of Materials.
+- A BOM contains multiple BOMItems linked to raw materials.
+- ProductionRun records the product, BOM, output and actual material consumption.
+- Purchases contain multiple PurchaseItems and generate raw-material stock receipts.
+- Customers can place multiple SalesOrders, each containing SalesOrderItems.
+- Sales orders can be associated with invoices.
+- An invoice can have multiple payment records.
+- StockMovement records inventory transactions, while AuditLog captures relevant user activities.
 
-The design uses primary keys and foreign keys to maintain referential integrity. Stock is derived from recorded movements rather than relying only on manually editable balances.
+Primary keys and foreign keys maintain relational references between entities. The StockMovement ledger provides traceability for inventory changes across business operations.
 
-## 2. Inventory Management and Production Logic
+## 3. Inventory and Production Design
 
-### Stock movement approach
+### Stock movement management
 
-Inventory is maintained through a central **StockMovement ledger**. Each movement records the item type, item ID, movement type, quantity, unit, reference, user and timestamp.
+NammaFactory uses a central stock movement ledger to record inventory transactions.
 
-Typical movements include:
-- Purchase receipt: increases raw-material stock.
-- Production consumption: decreases raw-material stock.
-- Production output: increases finished-goods stock.
-- Dispatch: decreases finished-goods stock.
+| Transaction | Inventory effect |
+|---|---|
+| Purchase receipt | Increases raw-material stock |
+| Production consumption | Decreases raw-material stock |
+| Production output | Increases finished-goods stock |
+| Customer dispatch | Decreases finished-goods stock |
 
-The stock balance is calculated by aggregating the relevant movements. Dispatch validation checks available finished stock before allowing a dispatch, preventing negative inventory.
+Stock balances are calculated from recorded movements. Before dispatch, the application validates available finished-goods stock to prevent dispatch quantities from exceeding available inventory.
 
 ### BOM-based production
 
-A Bill of Materials (BOM) specifies the standard material quantities required to manufacture a defined output quantity.
+A Bill of Materials defines the standard material requirements for a product. Production records capture planned output, actual good output, damaged quantity, material consumption, labour and overhead.
 
-For the benchmark Murukku 200g batch, the planned BOM output is 200 packets:
+The benchmark Murukku 200g production run uses the following planned and actual quantities:
 
-| Material | Planned quantity | Actual quantity |
+| Material | Planned | Actual |
 |---|---:|---:|
 | Rice flour | 40 kg | 40 kg |
 | Cooking oil | 10 L | 10.5 L |
 | Spice mix | 1.2 kg | 1.2 kg |
-| 200g pouch | 200 | 194 |
-| Carton (20 packets) | 10 | 9 |
+| Pouches | 200 | 194 |
+| Cartons | 10 | 9 |
 
-The production run records planned output, actual good output, damaged quantity, actual consumption and production expenses.
-
-**Yield variance:**
+Production yield and consumption variance are calculated as:
 
 \[
-\text{Yield variance} =
-\frac{\text{Actual good output}-\text{Planned output}}
-{\text{Planned output}}\times100
+\text{Yield}=\frac{\text{Good output}}{\text{Planned output}}\times100
 \]
 
 \[
-=\frac{188-200}{200}\times100=-6\%
+\text{Consumption variance}=
+\frac{\text{Actual consumption}-\text{Planned consumption}}
+{\text{Planned consumption}}\times100
 \]
 
-Oil consumption variance is:
+For the benchmark batch, 188 good packets were produced against 200 planned, resulting in a 94% yield. Oil consumption was 10.5 L against a planned 10 L, representing a 5% increase.
 
-\[
-\frac{10.5-10}{10}\times100=5\%
-\]
+## 4. Production Costing and Inventory Valuation
 
-Thus, the batch produced 188 good packets against 200 planned, with a 6% negative yield variance and 5% excess oil consumption.
-
-## 3. Costing and Inventory Valuation
-
-NammaFactory uses **weighted average costing** for raw-material valuation. The weighted average unit cost is calculated using opening inventory and purchases.
+The application uses weighted-average material costing based on configured opening inventory and recorded purchases.
 
 For rice flour:
 
 \[
-\text{Weighted average cost} =
+\text{Weighted average cost}=
 \frac{(100\times42)+(60\times45)}{100+60}
+=₹43.125/\text{kg}
 \]
 
-\[
-=₹43.125\text{ per kg}
-\]
+The benchmark production cost is calculated by combining material, labour and overhead expenses.
 
-The 40 kg consumed in production therefore costs ₹1,725.
+| Cost component | Amount |
+|---|---:|
+| Rice flour | ₹1,725 |
+| Cooking oil | ₹1,470 |
+| Spice mix | ₹240 |
+| Pouches | ₹485 |
+| Cartons | ₹135 |
+| **Material cost** | **₹4,055** |
+| Labour | ₹1,200 |
+| Gas and power overhead | ₹600 |
+| **Total production cost** | **₹5,855** |
 
-### Benchmark production cost
-
-| Cost component | Calculation | Cost |
-|---|---|---:|
-| Rice flour | 40 × ₹43.125 | ₹1,725 |
-| Cooking oil | 10.5 × ₹140 | ₹1,470 |
-| Spice mix | 1.2 × ₹200 | ₹240 |
-| Pouches | 194 × ₹2.50 | ₹485 |
-| Cartons | 9 × ₹15 | ₹135 |
-| **Total material cost** | | **₹4,055** |
-| Labour | | ₹1,200 |
-| Gas and power overhead | | ₹600 |
-| **Total production cost** | | **₹5,855** |
+Cost per good packet:
 
 \[
-\text{Cost per good packet} =
 \frac{₹5,855}{188}=₹31.14
 \]
 
-The unit production cost is calculated using actual good output, not planned output or total units including damaged products.
+The calculation uses actual good output as the denominator, providing a production cost that accounts for damaged units and recorded manufacturing expenses.
 
-### Benchmark stock reconciliation
+## 5. Sales, GST and Financial Workflow
 
-| Item | Opening | Purchase / Production | Consumption / Dispatch | Closing |
-|---|---:|---:|---:|---:|
-| Rice flour (kg) | 100 | +60 | −40 | 120 |
-| Cooking oil (L) | 30 | – | −10.5 | 19.5 |
-| Spice mix (kg) | 5 | – | −1.2 | 3.8 |
-| Pouches | 500 | – | −194 | 306 |
-| Cartons | 30 | – | −9 | 21 |
-| Murukku packets | 50 | +188 | −150 | 88 |
+Salesmen create customer orders, which are reviewed through the administrator approval workflow. Approved orders proceed through invoicing and dispatch operations.
 
-The finished-goods balance is 238 packets after production and 88 after dispatching 150 packets to Customer A. A subsequent order for 120 packets is blocked because only 88 packets are available.
+The invoicing module supports:
 
-## 4. Sales, GST and Financial Tracking
+- CGST and SGST for intra-state transactions.
+- IGST for interstate transactions.
+- PDF invoice generation.
+- Full and partial payment recording.
+- Outstanding balance and receivables tracking.
 
-Sales orders are entered by salesmen and remain pending until administrator approval. Approved orders can be invoiced and dispatched after stock validation.
+Dispatch validation checks finished-goods availability before stock deduction.
 
-The invoice calculation applies:
-- **CGST + SGST** for sales within Tamil Nadu.
-- **IGST** for interstate sales, such as a sale to Karnataka.
+In the benchmark scenario, the Tamil Nadu customer invoice has a taxable value of ₹7,500, with ₹187.50 CGST and ₹187.50 SGST. The Karnataka customer invoice has a taxable value of ₹6,000, with ₹300 IGST. The latter dispatch is blocked because the available stock is insufficient.
 
-For the benchmark sale to Customer A, the taxable amount is ₹7,500, CGST is ₹187.50 and SGST is ₹187.50, resulting in an invoice total of ₹7,875. A payment of ₹4,000 leaves ₹3,875 outstanding.
+These workflows connect sales, inventory and accounting rather than treating them as independent operations.
 
-The application also tracks payments, outstanding balances, sales registers, GST summaries and stock reports.
+## 6. Validation, Assumptions and Limitations
 
-## 5. Assumptions and Limitations
+The application was validated through automated business-logic tests and manual workflow checks.
 
-- The benchmark uses the quantities, prices and production expenses specified in the assignment.
-- The Murukku BOM is based on the supplied benchmark; other demonstration BOMs use illustrative values.
-- Weighted average costing is demonstrated using the available opening stock and purchase data.
-- The application is a functional prototype and is not certified for statutory GST filing or production accounting.
-- SQLite is suitable for the demonstration but would need migration to PostgreSQL for a larger multi-user deployment.
-- Advanced features such as offline synchronisation, batch-wise expiry tracking, FEFO, e-invoicing and e-waybill integration are not implemented.
+- Automated test result: **16 tests passed**.
+- Test coverage includes Decimal-based monetary calculations, GST classification, stock movement arithmetic, weighted-average costing and financial aggregation.
+- Manual validation covered role-based access, purchases, production posting, invoice generation, payments, dispatch validation, reporting, audit trail and system-health checks.
+- Benchmark system health: **7/7 checks passed**.
 
-The design prioritises traceable stock movements, BOM-based production, cost transparency and validation across the purchase-to-production-to-sales workflow.
+The implementation is a functional ERP prototype. GST calculations demonstrate basic intra-state and interstate tax treatment and are not a certified statutory filing system. Weighted-average costing uses configured opening rates and recorded purchases; it is not a complete perpetual inventory valuation engine.
+
+SQLite supports local demonstration. A larger deployment would require PostgreSQL or another server database, database migrations, managed backups, concurrency testing and additional security hardening. Offline synchronisation, batch-wise expiry tracking, FEFO dispatch, e-invoicing and e-waybill integration remain future enhancements.
+
+The design prioritises transaction traceability, stock consistency, BOM-driven production, transparent costing and integrated financial workflows across the manufacturing lifecycle.
