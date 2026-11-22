@@ -2,7 +2,6 @@
 
 This video presents a walkthrough of NammaFactory, demonstrating its role-based workspaces and integrated ERP workflows.
 
-**Demo Duration:** 7 minutes 57 seconds
 
 **Watch the Project Demonstration:**
 
