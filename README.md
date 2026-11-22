@@ -1,146 +1,187 @@
-# NammaFactory — Order-to-Audit ERP for Small Food Manufacturers
+# NammaFactory
+### An Integrated ERP Platform for Small Food Manufacturing Businesses
 
-NammaFactory is a role-based ERP prototype designed for small food manufacturers. It connects sales orders, GST invoicing, dispatch, inventory movements, purchases, BOM-based production, costing, payments, reconciliation and management reporting.
+NammaFactory is a role-based Enterprise Resource Planning (ERP) application designed to simplify and connect the day-to-day operations of small and medium-sized food manufacturing businesses.
 
-## Project status
+From customer order management and procurement to production planning, inventory tracking, GST invoicing and financial reporting, NammaFactory brings essential business operations together through a unified application and relational database.
 
-This internship project prototype is built using Python, Streamlit, SQLAlchemy and SQLite.
+The platform focuses on improving operational visibility, maintaining transaction traceability and connecting business activities across departments.
 
-- Five user roles with role-specific workspaces.
-- Purchase-to-production and sales-to-cash workflows.
-- Stock movement ledger and production costing.
-- GST invoice PDF generation and financial reports.
-- **Automated business-logic tests: 16 passed locally.**
+---
 
-> **Important:** This is a functional prototype, not a certified accounting package, statutory GST filing system or production-hardened multi-user ERP. See the assumptions and limitations below.
+## Overview
 
-## Core workflows
+Food manufacturing businesses often manage sales, raw materials, production, inventory and accounts through disconnected records. This makes it difficult to track stock movements, monitor production costs, manage customer payments and understand overall business performance.
 
-### Sales-to-cash
+NammaFactory addresses this by providing a connected ERP workflow in which transactions recorded by one department become available to the relevant downstream operations.
 
-1. Salesman creates a customer sales order.
-2. Administrator approves or rejects the order.
-3. Accountant generates the GST invoice.
-4. Dispatch checks finished-goods availability and records stock deduction.
-5. Accountant records full or partial customer payments.
-6. Receivables, reconciliation and ageing reports show outstanding balances.
+The application provides five role-specific workspaces:
 
-### Purchase-to-production
+- **Administrator** – Business administration, master data, order approvals, procurement and dispatch operations.
+- **Salesman** – Customer information and sales order entry.
+- **Production Supervisor** – Bills of Materials, production runs, material consumption and production costing.
+- **Accountant** – GST invoicing, payment recording, receivables and financial reporting.
+- **Factory Owner** – Business dashboards, production intelligence, financial reconciliation and analytics.
 
-1. Administrator records a supplier purchase.
-2. Purchase receipt increases raw-material stock through stock movements.
-3. Production supervisor selects a product BOM and records actual material consumption, good output, damaged units, labour and overhead.
-4. Production posting records raw-material issues and finished-goods output.
-5. Production intelligence compares planned and actual consumption, yield and batch cost.
+## Core Features
 
-## User roles
+### 1. Sales and Customer Management
 
-| Role | Main responsibilities |
+- Centralised customer and product records.
+- Sales order creation through a dedicated salesman interface.
+- Administrative order approval and rejection.
+- Product-level pricing and GST configuration.
+- Order history and status tracking.
+
+### 2. Procurement and Supplier Management
+
+- Supplier master management.
+- Purchase entry and supplier invoice references.
+- Raw-material receipt and inventory updates.
+- Duplicate supplier invoice reference protection.
+- Reorder-level configuration for raw materials.
+
+### 3. Production and Manufacturing
+
+- Product-wise Bill of Materials (BOM).
+- Planned and actual raw-material consumption tracking.
+- Production batch recording.
+- Good output and damaged-unit tracking.
+- Labour and overhead allocation.
+- Production yield and material consumption variance analysis.
+- Batch-level production costing and cost per good unit.
+
+### 4. Inventory Management
+
+- Raw-material and finished-goods stock tracking.
+- Transaction-based stock movement ledger.
+- Running stock balances.
+- Purchase receipts and production consumption records.
+- Finished-goods output and dispatch deductions.
+- Stock availability validation before dispatch.
+- Weighted-average material costing.
+
+### 5. GST Invoicing and Financial Management
+
+- GST-aware sales invoice generation.
+- Intra-state CGST and SGST calculation.
+- Interstate IGST calculation.
+- PDF invoice generation.
+- Full and partial customer payment recording.
+- Outstanding receivables and ageing information.
+- GST and financial reconciliation reports.
+
+### 6. Business Intelligence and Reporting
+
+- Factory Owner dashboard.
+- Production Intelligence and yield analysis.
+- Material consumption and cost indicators.
+- Business Analytics and visual reports.
+- GST and financial reconciliation.
+- Stock, sales, production, purchase and payment reports.
+- CSV and Excel exports.
+
+### 7. Audit and System Monitoring
+
+- Audit logging of recorded activities.
+- Searchable activity records.
+- Audit trail export.
+- System-health checks.
+- Role-specific navigation and authentication.
+
+---
+
+## Technology Stack
+
+| Technology | Application |
 |---|---|
-| Salesman | Create customer sales orders |
-| Factory administrator | Manage approvals, purchases, dispatch and administration |
-| Production supervisor | Record production runs and material consumption |
-| Accountant | Generate invoices, record payments and review financial reports |
-| Owner | View business dashboard, production intelligence and analytics |
+| Python | Core application and business logic |
+| Streamlit | Interactive web interface |
+| SQLAlchemy | ORM and database management |
+| SQLite | Relational database |
+| Pandas | Data processing and report preparation |
+| Plotly | Business analytics and visualisation |
+| ReportLab | PDF invoice generation |
+| OpenPyXL | Excel report export |
+| Pytest | Automated business-logic testing |
 
-The application uses password authentication with PBKDF2 password hashing and role-specific navigation.
+### Why this architecture?
 
-## Features against assignment scope
+Python provides a common foundation for transaction processing, calculations and reporting. Streamlit enables rapid development of interactive, role-specific interfaces, while SQLAlchemy provides structured database access.
 
-### Must Have
+SQLite supports straightforward local deployment without requiring a separate database server. The architecture separates application interfaces, database models, authentication and reusable business calculations.
 
-| Assignment requirement | Implementation |
-|---|---|
-| Login with at least three roles | Implemented: salesman, admin, production, accountant and owner |
-| Product, customer, raw-material and BOM masters | Implemented |
-| Mobile-friendly order entry and admin approval | Implemented using responsive Streamlit interfaces |
-| GST invoice as PDF | Implemented |
-| Production updates raw-material and finished-goods stock | Implemented through stock movements |
-| Planned vs actual consumption and yield variance | Implemented |
-| Stock summary and stock ledger | Implemented with running balances |
-| Sales register and stock report in Excel/CSV | Implemented |
+---
 
-### Should Have
+## System Architecture
 
-| Assignment requirement | Implementation |
-|---|---|
-| Purchases and supplier records | Implemented |
-| Payments, outstanding and ageing | Implemented, including partial payments |
-| Cost per packet with overheads | Implemented using material, labour and overhead costs |
-| GST summary report | Implemented |
-| Variance alerts | Implemented through production variance analysis |
-| Owner dashboard | Implemented |
+NammaFactory follows a layered application structure:
 
-### Stretch goals
+1. **Presentation Layer:** Streamlit interfaces and role-specific workspaces.
+2. **Application and Business Logic Layer:** Authentication, transaction workflows, GST calculations, inventory processing and production costing.
+3. **Data Access Layer:** SQLAlchemy ORM and database operations.
+4. **Database Layer:** SQLite relational storage.
+5. **Reporting Layer:** Pandas, Plotly, ReportLab and OpenPyXL.
 
-| Stretch goal | Status |
-|---|---|
-| Offline order capture with synchronisation | Not implemented |
-| Batch and expiry tracking with FEFO dispatch | Not implemented |
-| Reorder levels and low-stock alerts | Reorder thresholds are stored; a complete automated replenishment workflow is not claimed |
-| Production planning from pending orders | Not implemented |
-| Salesman route or GPS visit log | Not implemented |
-| Tally-compatible export | Not implemented |
-| e-Invoice / e-Way Bill integration | Not implemented |
-| Tamil language interface | Not implemented |
+### Database Design
 
-The implementation prioritises the benchmark and core operational workflows before stretch functionality.
+The relational data model includes the following entities:
 
-## Technology stack
+- User
+- Product
+- Customer
+- Supplier
+- RawMaterial
+- BOM and BOMItem
+- StockMovement
+- Purchase and PurchaseItem
+- ProductionRun and ProductionConsumption
+- SalesOrder and SalesOrderItem
+- Invoice
+- Payment
+- AuditLog
 
-| Technology | Purpose |
-|---|---|
-| Python | Application and business logic |
-| Streamlit | Web user interface |
-| SQLAlchemy | ORM and database access |
-| SQLite | Relational database for local prototype |
-| Pandas | Report preparation and tabular exports |
-| Plotly / Streamlit charts | Visual reporting where used |
-| ReportLab | GST invoice PDF generation |
-| openpyxl | Excel workbook export |
-| pytest | Automated business-logic tests |
+Inventory changes are recorded through stock movement transactions, allowing purchases, production consumption, finished-goods output and dispatch operations to be traced.
 
-**Why this stack?** Python provides a common language for the business logic, calculations and reporting. Streamlit enables rapid development of role-specific, responsive interfaces, while SQLAlchemy and SQLite provide a straightforward relational data model without requiring a separate database server for the demonstration.
+---
 
-For production deployment, SQLite should be replaced with a server database such as PostgreSQL, with managed backups, migrations, concurrency testing and stronger operational security.
-
-## Architecture and project structure
-
-The application separates the user interface, database models, authentication and reusable business calculations.
+## Project Structure
 
 ```text
 NammaFactory/
+│
 ├── app.py
 ├── database.py
 ├── models.py
 ├── seed.py
 ├── requirements.txt
+├── README.md
+├── TEST_LOG.md
+│
 ├── modules/
 │   ├── __init__.py
 │   └── authentication.py
+│
 ├── utils/
 │   ├── __init__.py
 │   └── business_logic.py
+│
 ├── tests/
 │   ├── __init__.py
 │   └── test_business_logic.py
-├── assets/
-└── README.md
+│
+└── assets/
 ```
 
-The relational schema includes users, products, customers, suppliers, raw materials, BOMs, purchases, production runs, consumption records, sales orders, invoices, payments, stock movements and audit logs.
+---
 
-Inventory balances are derived from stock movements rather than being maintained only as manually editable quantities. Movement records include item details, movement type, source reference, user and timestamp.
+## Installation and Setup
 
-The SQLite database is created locally. A live transaction database is not included in the public repository.
+### Prerequisites
 
-## Local setup
-
-### Requirements
-
-- Python 3.10 or later (developed and tested using Python 3.13).
-- Git.
-- Windows, macOS or Linux.
+- Python 3.10 or later
+- Git
+- Windows, macOS or Linux
 
 ### 1. Clone the repository
 
@@ -149,16 +190,16 @@ git clone https://github.com/Rishanya06/NammaFactory-ERP.git
 cd NammaFactory-ERP
 ```
 
-### 2. Create and activate a virtual environment
+### 2. Create a virtual environment
 
-Windows PowerShell:
+**Windows PowerShell**
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
-macOS/Linux:
+**macOS / Linux**
 
 ```bash
 python -m venv .venv
@@ -171,7 +212,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Initialise demo data
+### 4. Initialise the database
 
 ```bash
 python seed.py
@@ -179,168 +220,96 @@ python seed.py
 
 Run the seed script only when creating a fresh demo database or intentionally recreating demo data. Do not run it against a database containing transactions that must be preserved.
 
-### 5. Start the application
+### 5. Launch the application
 
 ```bash
 streamlit run app.py
 ```
 
-The terminal displays the local application URL, usually:
+The application will normally be available at:
 
-`http://localhost:8501`
+```text
+http://localhost:8501
+```
 
-## Demo accounts
+---
+
+## Demo Access
+
+The application includes five demonstration accounts:
 
 | Role | Username | Password |
 |---|---|---|
 | Administrator | `admin` | `Admin@123` |
 | Salesman | `salesman` | `Sales@123` |
-| Production supervisor | `production` | `Prod@123` |
+| Production Supervisor | `production` | `Prod@123` |
 | Accountant | `accountant` | `Accounts@123` |
-| Owner | `owner` | `Owner@123` |
+| Factory Owner | `owner` | `Owner@123` |
 
-These are demonstration credentials for local evaluation only. Change them before any deployment beyond a local demonstration. Do not use them for real business accounts.
+These credentials are intended only for local demonstration and evaluation. They must be changed before any deployment beyond a local prototype.
 
-## Automated tests
+---
 
-Run the test suite:
+## Testing and Validation
+
+NammaFactory includes automated tests for important business calculations and transaction logic.
+
+Run the test suite using:
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-The current business-logic suite contains 16 tests covering:
+The existing business-logic test suite covers:
 
-- Monetary rounding using `Decimal` and half-up rounding.
-- Tamil Nadu intrastate and interstate classification.
-- Stock ledger movement arithmetic.
-- Handling of unknown movement types.
-- Weighted-average flour and oil cost calculations.
-- Rejection of negative purchase quantities by the cost helper.
+- Monetary calculations and rounding using Python Decimal.
+- Intra-state and interstate GST classification.
+- Stock movement arithmetic.
+- Invalid stock movement handling.
+- Weighted-average material cost calculations.
+- Purchase quantity validation in cost calculations.
 - Invoice, GST, payment and outstanding aggregation.
-- Empty financial datasets.
+- Empty financial dataset handling.
 
-**Developer-reported local result: 16 passed.**
+**Recorded local test result: 16 tests passed.**
 
-See `TEST_LOG.md` for the test scope and benchmark validation notes.
+Refer to `TEST_LOG.md` for test execution details and benchmark validation.
 
-## Benchmark scenario and results
+---
 
-The following results are from the benchmark transactions executed in the local demo database. The benchmark uses an opening finished-goods balance of 50 Murukku packets.
+## Engineering Considerations and Limitations
 
-### Purchase and production
+NammaFactory is a functional ERP prototype intended for demonstration and further development.
 
-| Operation | Benchmark result |
-|---|---:|
-| Opening flour stock | 100 kg @ ₹42/kg |
-| Flour purchase | 60 kg @ ₹45/kg |
-| Weighted-average flour cost | ₹43.125/kg |
-| Planned production | 200 packets |
-| Actual good output | 188 packets |
-| Damaged units | 6 |
-| Actual flour consumption | 40 kg |
-| Actual oil consumption | 10.5 L |
-| Actual spice consumption | 1.2 kg |
-| Pouches used | 194 |
-| Cartons used | 9 |
+The following considerations apply:
 
-### Production variance and costing
+- GST calculations demonstrate basic intra-state and interstate tax treatment; the application is not a certified statutory GST filing system.
+- Weighted-average costing uses configured opening stock rates and recorded purchases; it is not a complete perpetual inventory valuation engine.
+- SQLite is intended for local demonstration. Production deployment would require a server database such as PostgreSQL, database migrations, managed backups and concurrency testing.
+- Audit records support operational traceability but are not tamper-proof or independently certified.
+- Offline synchronisation, batch-wise expiry tracking, FEFO dispatch, Tally integration, e-invoicing and e-waybill functionality are not implemented.
+- Production deployment would require additional security hardening, monitoring and operational controls.
 
-- Yield: 188 / 200 = **94%**.
-- Yield variance: **−6%**.
-- Oil consumption variance: **+5%** (10.5 L actual against 10 L planned).
+---
 
-| Cost component | Amount |
-|---|---:|
-| Flour: 40 × ₹43.125 | ₹1,725 |
-| Oil: 10.5 × ₹140 | ₹1,470 |
-| Spice: 1.2 × ₹200 | ₹240 |
-| Pouches: 194 × ₹2.50 | ₹485 |
-| Cartons: 9 × ₹15 | ₹135 |
-| **Total material cost** | **₹4,055** |
-| Labour | ₹1,200 |
-| Gas and power overhead | ₹600 |
-| **Total production cost** | **₹5,855** |
-| **Cost per good packet: ₹5,855 / 188** | **₹31.14** |
+## Future Development
 
-The cost per packet uses actual good output as the denominator and includes the recorded labour and overhead expenses.
+Potential areas for further development include:
 
-### Inventory reconciliation
+- PostgreSQL-based multi-user deployment.
+- Batch-wise traceability and expiry management.
+- FEFO-based inventory dispatch.
+- Automated low-stock and replenishment alerts.
+- Production planning based on pending sales orders.
+- Offline order capture and synchronisation.
+- Tally-compatible accounting exports.
+- E-invoice and e-waybill integration.
+- Enhanced business intelligence and forecasting.
 
-| Item | Expected closing balance |
-|---|---:|
-| Flour | 120 kg |
-| Oil | 19.5 L |
-| Spice | 3.8 kg |
-| Pouches | 306 |
-| Cartons | 21 |
-| Murukku after production | 238 packets |
-| Murukku after dispatch to Customer A | 88 packets |
+---
 
-### Sales and invoice results
-
-**Customer A — Tamil Nadu**
-
-| Item | Amount |
-|---|---:|
-| Quantity | 150 packets |
-| Taxable amount | ₹7,500 |
-| CGST | ₹187.50 |
-| SGST | ₹187.50 |
-| Invoice total | ₹7,875 |
-| Payment received | ₹4,000 |
-| Outstanding | ₹3,875 |
-
-**Customer B — Karnataka**
-
-- Order quantity: 120 packets.
-- Interstate GST treatment: IGST.
-- Invoice generated: ₹6,300, including ₹300 IGST.
-- Dispatch validation: blocked because only 88 packets were available.
-- Shortage reported: **32 packets**.
-
-The Customer B invoice remains outstanding for ₹6,300 because no payment was recorded in the benchmark.
-
-**Combined financial reconciliation**
-
-| Metric | Result |
-|---|---:|
-| Number of invoices | 2 |
-| Total invoice value | ₹14,175 |
-| Total GST | ₹675 |
-| Payment received | ₹4,000 |
-| Total outstanding | ₹10,175 |
-
-These figures describe the completed benchmark transactions in the demo database. Additional transactions or a fresh seed database will produce different aggregate reports.
-
-## Assumptions and limitations
-
-1. The demonstration factory is assumed to be located in Tamil Nadu. State comparison recognises common Tamil Nadu spellings and `TN`.
-2. GST calculation is a simplified place-of-supply demonstration. It does not cover all statutory GST cases, GSTIN validation, exemptions, reverse charge, e-invoicing, e-way bills or statutory return formats.
-3. Weighted-average material cost is calculated from configured opening stock rates and received purchase records. This is not a complete perpetual moving-average inventory valuation engine with full cost-layer depletion.
-4. The application uses SQLite for local demonstration. Multi-user concurrency, backup and restore, migrations and production monitoring need further engineering.
-5. Audit logging and read-only audit/system-health pages are implemented, but the audit trail is not tamper-proof or independently certified.
-6. Posted invoice cancellation through formal credit-note workflows is not implemented.
-7. Offline synchronisation, batch-wise expiry tracking, FEFO, barcode support, Tally export, e-invoice/e-waybill integration and statutory GST filing are not implemented.
-8. The prototype should be evaluated using dummy data, not real customer or financial records.
-
-## Repository and supporting documents
+## Repository
 
 **GitHub:** https://github.com/Rishanya06/NammaFactory-ERP
 
-- `DESIGN_NOTE.md` — architecture, data model, stock/BOM logic and costing method.
-- `TEST_LOG.md` — automated test execution and benchmark validation.
-- `seed.py` — demo master data initialisation.
-
-## Suggested demonstration flow
-
-1. Log in as Salesman and create Customer A's order.
-2. Log in as Administrator and approve the order.
-3. Generate the GST invoice PDF.
-4. Dispatch the order and record the ₹4,000 payment.
-5. Show the purchase receipt and raw-material stock update.
-6. Show the production run, actual consumption, yield variance and costing.
-7. Log in as Salesman and create Customer B's interstate order.
-8. Show the IGST invoice and the dispatch block caused by the 32-packet shortage.
-9. Log in as Owner and show the dashboard, Business Analytics, GST reconciliation, Stock Ledger and System Health.
-10. Run the automated test suite from the terminal.
+NammaFactory aims to provide small food manufacturers with a connected, traceable and data-driven approach to managing their business operations—from customer orders and manufacturing to inventory, accounts and management decisions.
