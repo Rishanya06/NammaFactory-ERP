@@ -320,7 +320,7 @@ NammaFactory aims to provide small food manufacturers with a connected, traceabl
 
 A complete walkthrough of NammaFactory, demonstrating its role-based workspaces and integrated ERP workflows.
 
-**Demo Video (7 minutes 57 seconds):**
+**Demo Video:**
 
 [Watch NammaFactory Demo](https://drive.google.com/file/d/1vPLXEMGBv3cmbznbGHl2U96j0ioWOwVT/view?usp=drive_link)
 
